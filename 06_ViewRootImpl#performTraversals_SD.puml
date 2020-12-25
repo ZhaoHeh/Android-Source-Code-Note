@@ -1,0 +1,207 @@
+@startuml
+actor sMainLooper as sml
+participant ViewRootImpl as vri
+
+/'box "mView and its super class instance" #White'/
+    participant "mView:DecorView" as mdv #LightPink
+    note over mdv
+    ViewRootImpl中的mView
+    实际类型为DecorView
+    在setView()方法中赋值
+    setView()被调用的起点
+    是ActivityThread的
+    handleResumeActivity()
+    方法, 调用时机在Activity
+    的onResume()回调之后
+    end note
+    participant FrameLayout as fl #LightPink
+    participant ViewGroup as vg #LightPink
+    participant View as vw #LightPink
+/'end box'/
+
+participant "child:View" as chd
+
+participant ThreadedRenderer as tr #LightBlue
+note over tr
+path: /frameworks/base/core/java
+      /android/view
+      /ThreadedRenderer.java
+end note
+participant HardwareRenderer as hr #LightBlue
+note over hr
+path: /frameworks/base/graphics
+      /java/android/graphics
+      /HardwareRenderer.java
+end note
+
+participant IWindowSession as iws
+participant Session as iws_stub
+note left
+path: /frameworks/base/services
+      /core/java/com/android
+      /server/wm/Session.java
+end note
+participant WindowManagerService as wms
+
+sml -> vri : performTraversals()
+activate vri
+note left : line1968--2797\n829行
+
+alt mFirst || windowShouldResize || insetsChanged || viewVisibilityChanged || params != null || mForceNextWindowRelayout
+    vri -> vri : relayoutWindow(\n  WindowManager.LayoutParams params,\n  int viewVisibility,\n  boolean insetsPending\n)
+    activate vri
+        vri -> iws : relayout
+        activate iws
+            iws ->> iws_stub : relayout
+            activate iws_stub
+                iws_stub -> wms : relayoutWindow
+                activate wms
+                wms --> iws_stub : return int
+                deactivate wms
+            iws_stub --> iws : return Surface
+            deactivate iws_stub
+        iws --> vri : return int
+        deactivate iws
+    vri --> vri : return int
+    deactivate vri
+alt !mStopped || mReportNextDraw
+alt focusChangedDueToTouchMode || mWidth != host.getMeasuredWidth() || mHeight != host.getMeasuredHeight() || contentInsetsChanged || updatedConfiguration
+    vri -> vri : performMeasure(\n  int childWidthMeasureSpec,\n  int childHeightMeasureSpec\n)
+    activate vri
+        vri -> vw : measure(\n  int widthMeasureSpec,\n  int heightMeasureSpec\n)
+        activate vw
+            vw -> mdv : onMeasure(\n  int widthMeasureSpec,\n  int heightMeasureSpec\n)
+            activate mdv
+                mdv -> fl : onMeasure(\n  int widthMeasureSpec,\n  int heightMeasureSpec\n)
+                activate fl
+                    fl -> chd : measure(\n  int widthMeasureSpec,\n  int heightMeasureSpec\n)
+                    activate chd
+                    chd --> fl
+                    deactivate chd
+                fl --> mdv
+                deactivate fl
+            mdv --> vw
+            deactivate mdv
+        vw --> vri
+        deactivate vw
+    vri --> vri
+    deactivate vri
+end
+end
+end
+
+alt didLayout
+    vri -> vri : performLayout(\n  WindowManager.LayoutParams lp,\n  int desiredWindowWidth,\n  int desiredWindowHeight\n)
+    activate vri
+        vri -> vg : layout(\n  int l, int t, int r, int b\n)
+        activate vg
+            vg -> vw : layout(\n  int l, int t, int r, int b\n)
+            activate vw
+                vw -> mdv : onLayout(\n  boolean changed,\n  int left, int top, int right, int bottom\n)
+                activate mdv
+                    mdv -> fl : onLayout(\n  boolean changed,\n  int left, int top, int right, int bottom\n)
+                    activate fl
+                        fl -> fl : layoutChildren(\n  int left, int top, int right, int bottom,\n  boolean forceLeftGravity\n)
+                        activate fl
+                            fl -> chd : layout(\n  int l, int t, int r, int b\n)
+                            activate chd
+                            chd --> fl
+                            deactivate chd
+                        fl --> fl
+                        deactivate fl
+                    fl --> mdv
+                    deactivate fl
+                mdv --> vw
+                deactivate mdv
+            vw --> vg
+            deactivate vw
+        vg --> vri
+        deactivate vg
+    vri --> vri
+    deactivate vri
+end
+
+alt !cancelDraw
+    vri -> vri : performDraw()
+    activate vri
+        vri -> vri : draw(boolean fullRedrawNeeded)
+        activate vri
+        alt !dirty.isEmpty() || mIsAnimating || accessibilityFocusDirty
+            alt mAttachInfo.mThreadedRenderer != null && mAttachInfo.mThreadedRenderer.isEnabled()
+                vri -> tr : draw(View view, AttachInfo attachInfo, DrawCallbacks callbacks)
+                activate tr
+                note left
+                硬件绘图
+                end note
+                    tr -> hr : syncAndDrawFrame(FrameInfo frameInfo)
+                    activate hr
+                        hr -> hr : nSyncAndDrawFrame(\n  long nativeProxy,\n  long[] frameInfo,\n  int size\n)
+                        activate hr
+                        note left
+                        native方法
+                        end note
+                        hr --> hr : return int
+                        deactivate hr
+                    hr --> tr : return int
+                    deactivate hr
+                tr --> vri
+                deactivate tr
+            else
+                vri -> vri : drawSoftware(\n  Surface surface, AttachInfo attachInfo,\n  int xoff, int yoff,\n  boolean scalingRequired,\n  Rect dirty, Rect surfaceInsets\n)
+                activate vri
+                note left
+                软件绘图
+                end note
+                    vri -> mdv : draw(Canvas canvas)
+                    activate mdv
+                        mdv -> vw : draw(Canvas canvas)
+                        activate vw
+
+                            vw -> mdv : onDraw(Canvas c)
+                            activate mdv
+                            note left
+                            DecorView重写了onDraw()方法,
+                            在里面调用super.onDraw(c), 但
+                            View类中的
+                            onDraw(Canvas canvas)
+                            是一个空方法, 仅用于子类重写.
+                            最终的结果就是
+                            DecorView.onDraw(Canvas c)
+                            方法调用super.onDraw(c), 
+                            而super.onDraw(c)什么也没做
+                            end note
+                                mdv -> vw : onDraw(Canvas canvas)
+                                activate vw
+                                note right : 空方法
+                                vw --> mdv
+                                deactivate vw
+                            mdv --> vw
+                            deactivate mdv
+
+                            vw -> vg : dispatchDraw(Canvas canvas)
+                            activate vg
+                                vg -> chd : draw(\n  Canvas canvas, ViewGroup parent, long drawingTime\n)
+                                activate chd
+                                chd --> vg
+                                deactivate chd
+                            vg --> vw
+                            deactivate vg 
+
+                        vw --> mdv
+                        deactivate vw
+                    mdv --> vri
+                    deactivate mdv
+                vri --> vri : return boolean
+                deactivate vri
+            end
+        end
+        vri --> vri : return boolean
+        deactivate vri
+    vri --> vri
+    deactivate vri
+end
+
+vri --> sml
+deactivate vri
+
+@enduml

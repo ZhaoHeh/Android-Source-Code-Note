@@ -1,0 +1,128 @@
+@startuml
+
+actor ActivityThread.main as main order 1
+participant Looper order 2
+participant sThreadLocal order 4
+participant "父类对象\nHandler" as hlr order 6
+participant "mH:Handler" as mH order 7
+actor AMS order 100
+
+main -> Looper : prepareMainLooper
+activate Looper
+    Looper -> Looper : prepare(false)
+    activate Looper
+
+        create looper order 3
+        Looper -> looper : new
+        activate looper
+            create mQueue order 4
+            looper -> mQueue : new
+            activate mQueue
+            mQueue --> looper
+            deactivate mQueue
+        looper --> Looper
+        deactivate looper
+
+        Looper -> sThreadLocal : set(looper)
+        activate sThreadLocal
+        sThreadLocal --> Looper
+        deactivate sThreadLocal
+
+    Looper --> Looper
+    deactivate Looper
+
+    /'
+    sMainLooper = myLooper()
+    '/
+Looper --> main
+deactivate Looper
+
+create ActivityThread order 7
+main -> ActivityThread : new
+activate ActivityThread
+ActivityThread --> main
+deactivate ActivityThread
+
+main -> ActivityThread : attach
+activate ActivityThread
+ActivityThread --> main
+deactivate ActivityThread
+
+main -> Looper : loop
+activate Looper
+
+    Looper -> Looper : myLooper
+    activate Looper
+        Looper -> sThreadLocal : get
+        activate sThreadLocal
+        sThreadLocal --> Looper : looper
+        deactivate sThreadLocal
+    Looper --> Looper : looper
+    deactivate Looper
+
+    loop forever
+        Looper -> mQueue : next
+        activate mQueue
+        mQueue --> Looper : msg
+        deactivate mQueue
+
+        Looper -> hlr : dispatchMessage(msg)
+        activate hlr
+        alt msg.callback != null
+            hlr -> hlr : handleCallback(msg)
+            activate hlr
+            note right
+            源码: message.callback.run()
+            即执行callback中的run()方法
+            end note
+            hlr --> hlr
+            deactivate hlr
+        else
+            hlr -> mH : handleMessage(msg)
+            activate mH
+                mH -> ActivityThread : handleBindApplication
+                activate ActivityThread
+                    /'Do Something'/
+                ActivityThread --> mH
+                deactivate ActivityThread
+            mH --> hlr
+            deactivate mH
+        end
+        hlr --> Looper
+        deactivate hlr
+    end
+
+AMS -> ActivityThread : sendMessage(H.BIND_APPLICATION, data)
+activate ActivityThread
+    ActivityThread -> ActivityThread : sendMessage(what, obj, 0, 0, false)
+    activate ActivityThread
+        ActivityThread -> mH : sendMessage(msg)
+        activate mH
+            mH -> hlr : sendMessageDelayed(msg, 0)
+            activate hlr
+                hlr -> hlr : sendMessageAtTime(msg, uptimeMillis)
+                activate hlr
+                    hlr -> hlr : enqueueMessage(queue, msg, uptimeMillis)
+                    activate hlr
+                        hlr -> mQueue : enqueueMessage(msg, uptimeMillis)
+                        activate mQueue
+                            /'Do Something'/
+                        mQueue --> hlr : return boolean
+                        deactivate mQueue
+                    hlr --> hlr : return boolean
+                    deactivate hlr
+                hlr --> hlr : return boolean
+                deactivate hlr
+            hlr --> mH : return boolean
+            deactivate hlr
+        mH --> ActivityThread : return boolean
+        deactivate mH
+    ActivityThread --> ActivityThread
+    deactivate ActivityThread
+ActivityThread --> AMS
+deactivate ActivityThread
+
+Looper --> main
+deactivate Looper
+
+@enduml

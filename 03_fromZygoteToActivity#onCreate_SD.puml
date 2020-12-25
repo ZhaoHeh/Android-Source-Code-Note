@@ -1,0 +1,250 @@
+@startuml
+
+actor ActivityThread.main as main
+participant "Looper" as Looper
+participant MyActivity
+participant Instrumentation as istm
+participant "thread:\nActivityThread" as actThread
+participant "mAppThread:\nApplicationThread\n(IApplicationThread.Stub)" as appThread 
+participant TransactionExecutor as texe
+participant LaunchActivityItem as launch
+participant ResumeActivityItem as resume
+participant ActivityManagerService as AMS
+participant "mAtmInternal:\nActivityTaskManagerService$LocalService\n(ActivityTaskManagerInternal)" as atmi
+participant RootActivityContainer as rootCtnr
+participant ActivityStackSupervisor as spv
+participant ClientLifecycleManager as lifecycle
+participant ClientTransaction as ct
+
+main -> Looper : prepareMainLooper()
+activate Looper
+Looper --> main
+deactivate Looper
+
+create actThread
+main -> actThread : new
+activate actThread
+    create appThread
+    actThread -> appThread : new
+    activate appThread
+    appThread --> actThread
+    deactivate appThread
+actThread --> main
+deactivate actThread
+
+/'***
+Attach this newly created process to a specific application.
+***'/
+
+main -> actThread : attach(boolean system, long startSeq)
+note right
+实参为(false, startSeq)
+startSeq相关代码(line7374@ActivityThread.java):
+if (args != null) {
+    for (int i = args.length - 1; i >= 0; --i) {
+        if (args[i] != null && args[i].startsWith(PROC_START_SEQ_IDENT)) {
+            startSeq = Long.parseLong(
+                    args[i].substring(PROC_START_SEQ_IDENT.length()));
+        }
+    }
+}
+end note
+activate actThread
+    actThread ->> AMS : attachApplication(IApplicationThread thread, long startSeq)
+    activate AMS
+    note left
+    thread实参为mAppThread, 是一个IBinder
+    end note
+actThread --> main
+deactivate actThread
+
+AMS -> AMS : attachApplicationLocked(\n  IApplicationThread thread,\n  int pid,\n  int callingUid,\n  long startSeq)
+note left
+line:4768--5186, 418行
+(1)通过mProcessList数据结构找到对应的ProcessRecord实例
+!AMS寻找ProcessRecord的逻辑以及ProcessRecord合适被添加
+到AMS的数据结构中, 仍是无法确定的难点!
+(2)注册AppDeathRecipient到应用进程端
+(3)完善ProcessRecord实例的各个field
+(4)通过Binder调用应用进程端的bindApplication
+(5)ProcessRecord实例调用makeActive方法
+(6)运行the top visible Activity
+(7)运行其他组件, 如启动Activity, 绑定Service等
+end note
+activate AMS
+
+main -> Looper : loop()
+activate Looper
+    
+AMS ->> appThread : bindApplication
+activate appThread
+note left
+line5058@ActivityManagerService.java
+end note
+    appThread ->> Looper : sendMessage(H.BIND_APPLICATION, data)
+    note left
+    这里的消息只是象征性的写法, ApplicationThread
+    并没有真正调用Looper的sendMessage方法. 这里想
+    表达的是, ApplicationThread向整个Looper机制中
+    添加消息的操作是异步于主线程的, 下面的同理
+    end note
+deactivate appThread
+
+AMS -> atmi : attachApplication(\n  WindowProcessController wpc\n)
+activate atmi
+
+Looper -> actThread : handleBindApplication
+activate actThread
+    note right #FFAAAA : KEY-01
+    /'Do Something Important'/
+actThread --> Looper
+deactivate actThread
+
+/'After the previous step, the system contains the process responsible for the application with application classes loaded in process's private memory.'/
+
+
+
+/'***
+See if the top visible activity is waiting to run in this process...
+The call sequence to launch an activity is common between a newly created process and an existing process.
+***'/
+
+    atmi -> rootCtnr : attachApplication(\n  WindowProcessController app\n)
+    activate rootCtnr
+        rootCtnr -> spv : realStartActivityLocked(\n  ActivityRecord r,\n  WindowProcessController proc,\n  boolean andResume,\n  boolean checkConfig\n)
+        note right
+        line720@ActivityStackSupervisor.java
+        实参为符合条件的activity, 调用者
+        的入参app, top == activity(即若activity
+        在top, 则resume), true
+        那么activity是如何确定的呢?
+        activity.app == null (ActivityRecord#app类型为
+        WindowProcessController)
+        && app.mUid == activity.info.applicationInfo.uid
+        && processName.equals(activity.processName)
+        end note
+        activate spv
+            spv -> lifecycle : scheduleTransaction(\n  ClientTransaction transaction\n)
+            activate lifecycle
+                lifecycle -> ct : schedule()
+                activate ct
+                    ct ->> appThread : scheduleTransaction(\n  ClientTransaction transaction\n)
+                    activate appThread
+                ct --> lifecycle
+                deactivate ct
+            lifecycle --> spv
+            deactivate lifecycle
+        spv --> rootCtnr : return boolean
+        deactivate spv
+    rootCtnr --> atmi : return boolean
+    deactivate rootCtnr
+
+atmi --> AMS : return boolean
+deactivate atmi
+
+AMS --> AMS : return
+deactivate AMS
+
+deactivate AMS
+
+
+
+appThread -> actThread : scheduleTransaction(transaction)
+    activate actThread
+    actThread ->> Looper : sendMessage(ActivityThread.H.EXECUTE_TRANSACTION, transaction)
+        /'Message enqueue'/
+    actThread --> appThread
+    deactivate actThread
+deactivate appThread
+
+
+
+Looper -> texe : execute(\n  ClientTransaction transaction\n)
+note right #FFAAAA : KEY-02
+activate texe
+    /'
+        /**
+        * Resolve transaction.
+        * First all callbacks will be executed in the order they appear in the list. If a callback
+        * requires a certain pre- or post-execution state, the client will be transitioned accordingly.
+        * Then the client will cycle to the final lifecycle state if provided. Otherwise, it will
+        * either remain in the initial state, or last state needed by a callback.
+        */
+    '/
+    texe -> texe : executeCallbacks(transaction)
+    activate texe
+        texe -> launch : execute(mTransactionHandler, token, mPendingActions)
+        activate launch
+            launch -> actThread : handleLaunchActivity(r, pendingActions, null)
+            activate actThread
+                actThread -> actThread : performLaunchActivity(r, customIntent)
+                activate actThread
+
+                    create MyActivity
+                    actThread -> MyActivity : new
+                    activate MyActivity
+                    MyActivity --> actThread
+                    deactivate MyActivity
+
+                    actThread -> MyActivity : attach()
+                    activate MyActivity
+                    MyActivity --> actThread
+                    deactivate MyActivity
+
+                    actThread -> istm : callActivityOnCreate
+                    activate istm
+                        istm -> MyActivity : performCreate
+                        activate MyActivity
+                            MyActivity -> MyActivity : onCreate
+                            activate MyActivity
+                            MyActivity --> MyActivity :
+                            deactivate MyActivity
+                        MyActivity --> istm
+                        deactivate MyActivity
+                    istm --> actThread :
+                    deactivate istm
+
+                actThread --> actThread : return Activity
+                deactivate actThread
+            actThread --> launch : return Activity
+            deactivate actThread
+        launch --> texe
+        deactivate launch
+    texe --> texe
+    deactivate texe
+
+    texe -> texe : executeLifecycleState(transaction)
+    activate texe
+        texe -> resume : execute(mTransactionHandler, token, mPendingActions)
+        activate resume
+            resume -> actThread : handleResumeActivity(token, true, mIsForward, "RESUME_ACTIVITY")
+            note left : performResumeActivity完成后\n会有和显示相关的代码执行
+            activate actThread
+                actThread -> actThread : performResumeActivity(token, finalStateRequest, reason)
+                activate actThread
+                    actThread -> MyActivity : performResume(r.startsNotResumed, reason)
+                    activate MyActivity
+
+                        MyActivity -> istm : callActivityOnResume
+                        activate istm
+                            istm -> MyActivity : onResume
+                            activate MyActivity
+                            MyActivity --> istm
+                            deactivate MyActivity
+                        istm --> MyActivity :
+                        deactivate istm
+
+                    MyActivity --> actThread
+                    deactivate MyActivity
+                actThread -> actThread : return r
+                deactivate actThread
+            actThread --> resume
+            deactivate actThread
+        resume --> texe
+        deactivate resume
+    texe --> texe
+    deactivate texe
+texe --> Looper
+deactivate texe
+
+@enduml

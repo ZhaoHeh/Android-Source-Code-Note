@@ -1,0 +1,179 @@
+@startuml
+
+actor sMainLooper as sml
+participant ViewRootImpl as vri
+participant "mView:DecorView" as dv
+participant "child:View" as chd
+participant Canvas as cvs
+participant Surface as sfc
+note right of sfc
+Java层Surface
+path: /frameworks/base/core/java
+      /android/view/Surface.java
+其字段 long mNativeObject 和
+private long mLockedObject
+都指向的是C++层的Surface对象
+end note
+participant "mNativeObject\nof Surface\n:Surface[C++]" as sfc_c
+note right of sfc_c
+C++本地层Surface
+path: /frameworks/native/libs
+      /gui/Surface.cpp
+end note
+participant SkBitmap as skbmp
+participant Canvas as cvs_c
+participant "mProducer\nof MonitoredProducer\n:BufferQueueProducer" as gbp
+/'frameworks/native/services/surfaceflinger/MonitoredProducer.cpp'/
+/'frameworks/native/libs/gui/BufferQueueProducer.cpp'/
+participant GraphicBuffer as gb
+
+sml -> vri : drawSoftware(\n  Surface surface,\n  AttachInfo attachInfo,\n  int xoff, int yoff,\n  boolean scalingRequired,\n  Rect dirty,\n  Rect surfaceInsets\n)
+activate vri
+    vri -> sfc : lockCanvas(Rect inOutDirty)
+    activate sfc
+        sfc -> sfc : nativeLockCanvas
+        activate sfc
+        note left
+        native方法
+        实参为mNativeObject,
+        mCanvas, inOutDirty
+        path: 
+        /frameworks/base/core/jni
+        /android_view_Surface.cpp
+        end note
+            sfc -> sfc_c : lock(\n  ANativeWindow_Buffer* outBuffer,\n  ARect* inOutDirtyBounds\n)
+            activate sfc_c
+
+                alt !mConnectedToCpu
+                    sfc_c -> sfc_c : connect(NATIVE_WINDOW_API_CPU)
+                    activate sfc_c
+                    sfc_c --> sfc_c : return status_t
+                    deactivate sfc_c
+                end
+
+                sfc_c -> sfc_c : dequeueBuffer(\n  android_native_buffer_t** buffer,\n  int* fenceFd\n)
+                activate sfc_c
+                    sfc_c -> gbp : dequeueBuffer(\n  int* slot,\n  sp<Fence>* fence,\n  uint32_t w,\n  uint32_t h,\n  PixelFormat format,\n  uint64_t usage,\n  uint64_t* outBufferAge,\n  FrameEventHistoryDelta* outTimestamps\n)
+                    activate gbp
+                    gbp --> sfc_c : return status_t
+                    deactivate gbp
+                sfc_c --> sfc_c : return status_t
+                deactivate sfc_c
+
+                sfc_c -> gb : lockAsync
+                activate gb
+                note left
+                锁定此buffer,
+                防止别人使用
+                end note
+                gb --> sfc_c : return status_t
+                deactivate gb
+
+            sfc_c --> sfc : return status_t
+            deactivate sfc_c
+
+            sfc -> skbmp : setPixels(outBuffer.bits)
+            activate skbmp
+            note left
+            ANativeWindow_Buffer.bits
+            所指向的内存地址作为参数
+            被传入到SkBitmap中
+            end note
+            skbmp --> sfc
+            deactivate skbmp
+
+            sfc -> cvs_c : setBitmap(SkBitmap)
+            activate cvs_c
+            note left
+            SkBitmap被设置到C++层
+            的Canvas对象中
+            end note
+            cvs_c --> sfc
+            deactivate cvs_c
+
+        sfc --> sfc : return long
+        deactivate sfc
+    sfc --> vri : return Canvas
+    deactivate sfc
+
+    vri -> dv : draw(Canvas canvas)
+    activate dv
+
+        dv -> dv : onDraw(Canvas c)
+        activate dv
+        dv --> dv
+        deactivate dv
+
+        dv -> dv : dispatchDraw(Canvas canvas)
+        activate dv
+            dv -> chd : draw(\n  Canvas canvas,\n  ViewGroup parent,\n  long drawingTime\n)
+            activate chd
+                chd -> chd : draw(Canvas canvas)
+                activate chd
+                    chd -> chd : onDraw(Canvas c)
+                    activate chd
+
+                        chd -> cvs : save()
+                        activate cvs
+                        cvs --> chd
+                        deactivate cvs
+
+                        chd -> cvs : drawPath(\n  Path path, Paint paint\n)
+                        activate cvs
+                        cvs --> chd
+                        deactivate cvs
+
+                        chd -> cvs : restore()
+                        activate cvs
+                        cvs --> chd
+                        deactivate cvs
+
+                    chd --> chd
+                    deactivate chd
+                chd --> chd
+                deactivate chd
+            chd --> dv
+            deactivate chd
+        dv --> dv
+        deactivate dv
+    dv --> vri
+    deactivate dv
+
+    vri -> sfc : unlockCanvasAndPost(Canvas canvas)
+    activate sfc
+        sfc -> sfc : unlockSwCanvasAndPost(Canvas canvas)
+        activate sfc
+            sfc -> sfc : nativeUnlockCanvasAndPost(\n  long nativeObject,\n  Canvas canvas\n)\nnativeUnlockCanvasAndPost(\n  JNIEnv* env,\n  jclass clazz,\n  jlong nativeObject,\n  jobject canvasObj\n)
+            activate sfc
+            note left
+            native方法
+            end note
+                sfc -> sfc_c : unlockAndPost()
+                activate sfc_c
+
+                    sfc_c -> gb : unlockAsync(int *fenceFd)
+                    activate gb
+                    gb --> sfc_c : status_t
+                    deactivate gb
+
+                    sfc_c -> sfc_c : queueBuffer(\n  android_native_buffer_t* buffer,\n  int fenceFd\n)
+                    activate sfc_c
+                        sfc_c -> gbp : queueBuffer(\n  int slot,\n  const QueueBufferInput& input,\n  QueueBufferOutput* output\n)
+                        activate gbp
+                        gbp --> sfc_c : status_t
+                        deactivate gbp
+                    sfc_c --> sfc_c : return status_t
+                    deactivate sfc_c
+
+                sfc_c --> sfc : return status_t
+                deactivate sfc_c
+            sfc --> sfc
+            deactivate sfc
+        sfc --> sfc
+        deactivate sfc
+    sfc --> vri
+    deactivate sfc
+vri --> sml
+deactivate vri
+
+@enduml

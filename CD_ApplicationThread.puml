@@ -1,0 +1,43 @@
+@startuml
+
+/' /frameworks/base/core/java/android/os/Binder.java '/
+/' /frameworks/base/core/java/android/os/IBinder.java '/
+/' /frameworks/base/core/java/android/os/IInterface.java '/
+
+/' /frameworks/base/core/java/android/app/IApplicationThread.aidl '/
+
+
+
+interface IBinder {
+    {method} transact()
+}
+
+class Binder {
+    {method} onTransact()
+}
+
+interface IInterface {
+    {method} IBinder asBinder();
+}
+
+interface IApplicationToken {
+    {method} String getName()
+}
+
+abstract class IApplicationThread.Stub {  
+}
+
+class IApplicationThread.Stub.Proxy {
+}
+
+class ApplicationThread extends IApplicationThread.Stub {
+}
+
+IBinder <|.. Binder
+IInterface <|-- IApplicationToken 
+Binder <|-- IApplicationToken.Stub
+IApplicationToken <|.. IApplicationToken.Stub
+IApplicationToken <|.. IApplicationToken.Stub.Proxy
+IApplicationToken.Stub <|-- Token
+
+@enduml

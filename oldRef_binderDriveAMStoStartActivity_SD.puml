@@ -1,0 +1,259 @@
+@startuml
+
+actor binder
+participant "ActivityManagerService" as AMS
+/' 源码树路径: /frameworks/base/services/core/java/com/android/server/am/ActivityManagerService.java '/
+participant "mActivityTaskManager:\nActivityTaskManagerService" as ATMS
+/' 源码树路径: /frameworks/base/services/core/java/com/android/server/wm/ActivityTaskManagerService.java '/
+participant "mActivityStartController:\nActivityStartController" as ctler
+/' 源码树路径: /frameworks/base/services/core/java/com/android/server/wm/ActivityStartController.java '/
+participant "ActivityStarter" as starter
+/' 源码树路径: /frameworks/base/services/core/java/com/android/server/wm/ActivityStarter.java '/
+participant "mRootActivityContainer:\nRootActivityContainer" as rootCtnr
+/' 源码树路径: /frameworks/base/services/core/java/com/android/server/wm/RootActivityContainer.java '/
+participant "mTargetStack:\nActivityStack" as stack
+/' 源码树路径: /frameworks/base/services/core/java/com/android/server/wm/ActivityStack.java '/
+participant "TaskRecord" as task
+/' 源码树路径: /frameworks/base/services/core/java/com/android/server/wm/TaskRecord.java '/
+participant "ActivityStackSupervisor" as SUP
+/' 源码树路径: /frameworks/base/services/core/java/com/android/server/wm/ActivityStackSupervisor.java '/
+participant ClientLifecycleManager as lifecycle
+participant ClientTransaction as ct
+participant IApplicationThread
+
+binder -> AMS : startActivity
+note right
+    line:3499--3504
+    参数列表过长, 列举在此:
+    IApplicationThread caller, String callingPackage, Intent intent, String resolvedType, IBinder resultTo,
+    String resultWho, int requestCode, int startFlags, ProfilerInfo profilerInfo, Bundle bOptions
+end note
+activate AMS
+
+AMS -> ATMS : startActivity
+activate ATMS
+
+ATMS -> ATMS : startActivityAsUser
+note left: line: 1032
+activate ATMS
+
+ATMS -> ATMS : startActivityAsUser
+note left: line: 1040
+activate ATMS
+
+ATMS -> ctler : checkTargetUser
+activate ctler
+ctler --> ATMS : return int
+deactivate ctler
+
+ATMS -> ctler : obtainStarter
+activate ctler
+ctler --> ATMS : return ActivityStarter实例
+deactivate ctler
+
+ATMS -> starter : execute
+activate starter
+
+/'**************** in ATMS -> starter : execute ****************'/
+
+starter -> starter : startActivityMayWait
+note right: line: 1144, 233行
+activate starter
+
+starter -> SUP : resolveIntent
+activate SUP
+return ResolveInfo
+
+starter -> SUP : resolveActivity
+activate SUP
+return ActivityInfo
+
+starter -> starter : startActivity
+activate starter
+note right: line: 568
+
+starter -> starter : startActivity
+activate starter
+note right: line: 613, 326行
+
+starter -> starter : startActivity
+activate starter
+note right: line: 1396, 50行
+
+starter -> starter : startActivityUnchecked
+note right: line: 1473, 285行
+activate starter
+
+/'**************** in starter -> starter : startActivityUnchecked ****************'/
+
+starter -> stack : startActivityLocked
+activate stack
+    stack --> task : setFrontOfTask()
+    activate task
+    note right
+    遍历 ActivityRecord r : mActivities
+    如果r.finishing为true, 则r.frontOfTask置为false
+    如果r.finishing为false, 则r.frontOfTask置为true
+    end note
+    task --> stack
+    deactivate task
+stack --> starter
+deactivate stack
+
+alt mDoResume && mTargetStack.isFocusable() && (topTaskActivity == null || !topTaskActivity.mTaskOverlay || mStartActivity == topTaskActivity)
+    starter -> rootCtnr : resumeFocusedStacksTopActivities(\nmTargetStack, mStartActivity, mOptions)
+    activate rootCtnr
+
+        rootCtnr -> SUP : readyToResume
+        activate SUP
+        SUP --> rootCtnr : return boolean
+        deactivate SUP
+
+        rootCtnr -> stack : resumeTopActivityUncheckedLocked(\nActivityRecord, ActivityOptions)
+        activate stack
+            stack -> stack : resumeTopActivityInnerLocked(\nActivityRecord, ActivityOptions)
+            activate stack
+            note right
+            line:2615--3043, 428
+            end note
+
+                stack -> stack : topRunningActivityLocked(\ntrue /* focusableOnly */)
+                activate stack
+                stack --> stack : return ActivityRecord
+                deactivate stack
+
+                alt next.attachedToProcess()
+                    stack -> lifecycle : scheduleTransaction(transaction)
+                    activate lifecycle
+                    note right
+                    调度生命周期: ActivityResultItem NewIntentItem ResumeActivityItem
+                    end note
+                        lifecycle -> ct : schedule()
+                        activate ct
+                            ct ->> IApplicationThread : scheduleTransaction(this)
+                        ct --> lifecycle
+                        deactivate ct
+                    lifecycle --> stack
+                    deactivate lifecycle
+                else
+                    stack -> SUP : startSpecificActivityLocked(ActivityRecord, true, true)
+                    activate SUP
+                        alt wpc != null && wpc.hasThread()
+                            SUP -> SUP : realStartActivityLocked(r, wpc, true, true)
+                            activate SUP
+                                SUP -> lifecycle : scheduleTransaction(transaction)
+                                activate lifecycle
+                                note right
+                                调度生命周期: LaunchActivityItem ResumeActivityItem/PauseActivityItem
+                                end note
+                                    lifecycle -> ct : schedule()
+                                    activate ct
+                                        ct ->> IApplicationThread : scheduleTransaction(this)
+                                    ct --> lifecycle
+                                    deactivate ct
+                                lifecycle --> SUP
+                                deactivate lifecycle
+                            SUP --> SUP
+                            deactivate SUP
+                        else
+                            /' 启动新进程 '/
+                            SUP ->>] : startProcessLocked
+                            note right
+                            参数列表: String processName, ApplicationInfo info, boolean knownToBeDead,
+                            int intentFlags, HostingRecord hostingRecord, boolean allowWhileBooting,
+                            boolean isolated, boolean keepIfLarge
+                            实际上被异步调用的对象时ActivityManagerService, 但是为了画图方便, 这里的箭头指向了
+                            空处
+                            end note
+                        end
+                    SUP --> stack
+                    deactivate SUP
+                end
+
+            stack --> stack
+            deactivate stack
+        stack --> rootCtnr : return boolean
+        deactivate stack
+
+    rootCtnr --> starter
+    deactivate rootCtnr
+end
+
+/'**************** end in starter -> starter : startActivityUnchecked ****************'/
+
+/'
+starter -> starter : startActivityUnchecked
+note right: line: 1474\n284行
+activate starter
+'/
+starter -> starter : return int
+deactivate starter
+
+/'
+starter -> starter : startActivity
+activate starter
+note right: line: 1396\n50行
+'/
+starter -> starter : return int
+deactivate starter
+
+/'
+starter -> starter : startActivity
+activate starter
+note right: line: 613\n326行
+'/
+starter --> starter : return int
+deactivate starter
+
+/'
+starter -> starter : startActivity
+activate starter
+note right: line: 568
+'/
+starter --> starter : return int
+deactivate starter
+
+/'
+starter -> starter : startActivityMayWait
+note right: line: 1144\n233行
+activate starter
+'/
+starter --> starter : return int
+deactivate starter
+
+/'**************** end in ATMS -> starter : execute ****************'/
+
+/'
+ATMS -> starter : execute
+activate starter
+'/
+starter --> ATMS : return int
+deactivate starter
+
+/'
+ATMS -> ATMS : startActivityAsUser
+note left: line: 1040
+activate ATMS
+'/
+ATMS --> ATMS
+deactivate ATMS
+
+/'
+ATMS -> ATMS : startActivityAsUser
+note left: line: 1032
+activate ATMS
+'/
+ATMS --> ATMS : return int
+deactivate ATMS
+
+/'
+AMS -> ATMS : startActivity
+activate ATMS
+'/
+ATMS --> AMS : return int
+deactivate ATMS
+
+binder <-- AMS : return int
+deactivate AMS
+
+@enduml

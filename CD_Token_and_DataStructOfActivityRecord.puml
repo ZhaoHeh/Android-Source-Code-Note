@@ -1,0 +1,107 @@
+@startuml
+
+
+interface IBinder {
+    int FIRST_CALL_TRANSACTION  = 0x00000001;
+    int LAST_CALL_TRANSACTION   = 0x00ffffff;
+    int PING_TRANSACTION;
+    int DUMP_TRANSACTION;
+    int SHELL_COMMAND_TRANSACTION;
+    int INTERFACE_TRANSACTION;
+    int TWEET_TRANSACTION;
+    int LIKE_TRANSACTION;
+    int SYSPROPS_TRANSACTION;
+    int FLAG_ONEWAY             = 0x00000001;
+    + boolean pingBinder();
+    + boolean isBinderAlive();
+    + @Nullable IInterface queryLocalInterface(\n  @NonNull String descriptor\n);
+    + void dump(@NonNull FileDescriptor fd, @Nullable String[] args);
+    + void dumpAsync(\n  @NonNull FileDescriptor fd,\n  @Nullable String[] args\n);
+    + void shellCommand(\n  @Nullable FileDescriptor in,\n  @Nullable FileDescriptor out,\n  @Nullable FileDescriptor err,\n  @NonNull String[] args,\n  @Nullable ShellCallback shellCallback,\n  @NonNull ResultReceiver resultReceiver\n);
+    + boolean transact(\n  int code,\n  @NonNull Parcel data,\n  @Nullable Parcel reply,\n  int flags\n);
+    + void linkToDeath(\n  @NonNull DeathRecipient recipient,\n  int flags\n);
+    + boolean unlinkToDeath(\n  @NonNull DeathRecipient recipient,\n  int flags\n);
+}
+
+class Binder {
+    - IInterface mOwner;
+    - String mDescriptor;
+    + void attachInterface(\n  @Nullable IInterface owner,\n  @Nullable String descriptor\n);
+    # boolean onTransact(\n  int code,\n  @NonNull Parcel data,\n  @Nullable Parcel reply,\n  int flags\n)
+}
+
+interface IInterface {
+    + IBinder asBinder();
+}
+
+interface IApplicationToken {
+    + String getName();
+}
+
+abstract class IApplicationToken$Stub {
+    - {static} final String DESCRIPTOR = "android.view.IApplicationToken";
+    + Stub();
+    + {static} IApplicationToken asInterface(IBinder obj);
+    + IBinder asBinder();
+    + boolean onTransact(\n  int code,\n  Parcel data,\n  Parcel reply,\n  int flags\n);
+    ~ {static} final int TRANSACTION_getName = IBinder.FIRST_CALL_TRANSACTION + 0;
+
+}
+
+class ActivityRecord$Token {
+    - final WeakReference<ActivityRecord> weakActivity;
+    - final String name;
+    ~ Token(ActivityRecord activity, Intent intent);
+    - {static} @Nullable ActivityRecord tokenToActivityRecordLocked(Token token);
+    + String toString();
+    
+    + String getName();
+}
+
+note right of ActivityRecord$Token
+Token类可以说是ActivityRecord类的一个
+索引, 其中保存了weakActivity, 可以直接
+获取到对应的ActivityRecord对象, 同时
+其实现了IBinder接口, 似乎可以跨进程
+传递
+end note
+
+class IApplicationToken$Stub$Proxy {
+    - IBinder mRemote;
+    ~ Proxy(IBinder remote);
+    + IBinder asBinder();
+    + String getInterfaceDescriptor();
+
+    + String getName();
+}
+
+class ActivityRecord {
+}
+
+class ActivityStack {
+}
+
+class ActivityDisplay {
+}
+
+class RootActivityContainer {
+}
+
+IInterface <|-- IApplicationToken 
+IApplicationToken <|.. IApplicationToken$Stub
+IBinder <|.. Binder
+Binder <|-- IApplicationToken$Stub
+IApplicationToken$Stub <|-- ActivityRecord$Token
+
+ActivityRecord o--o ActivityRecord$Token
+
+
+RootActivityContainer o-- ActivityDisplay
+ActivityDisplay --> RootActivityContainer
+ActivityDisplay o-- ActivityStack
+ActivityStack --> RootActivityContainer
+
+
+IApplicationToken <|.. IApplicationToken$Stub$Proxy
+
+@enduml

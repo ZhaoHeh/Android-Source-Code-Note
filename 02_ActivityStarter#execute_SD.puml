@@ -1,0 +1,984 @@
+@startuml
+
+actor "ActivityTaskManagerService\n(IActivityTaskManager.Stub)" as atm_stub
+
+participant "ActivityStarter" as starter
+participant "mSupervisor:\nActivityStackSupervisor" as spv
+participant "r:\nmStartActivity:\nActivityRecord" as r
+participant "TaskRecord" as task
+participant "mTargetStack:\nActivityStack" as stack
+participant "diplay:\nActivityDisplay" as display
+participant "mRootActivityContainer:\nRootActivityContainer" as root
+
+
+
+atm_stub -> starter : execute()
+activate starter
+    starter -> starter : startActivityMayWait(\n  IApplicationThread caller,\n  int callingUid,\n  String callingPackage,\n  int requestRealCallingPid,\n  int requestRealCallingUid,\n  Intent intent,\n  String resolvedType,\n  IVoiceInteractionSession voiceSession,\n  IVoiceInteractor voiceInteractor,\n  IBinder resultTo,\n  String resultWho,\n  int requestCode,\n  int startFlags,\n  ProfilerInfo profilerInfo,\n  WaitResult outResult,\n  Configuration globalConfig,\n  SafeActivityOptions options,\n  boolean ignoreTargetSecurity,\n  int userId,\n  TaskRecord inTask,\n  String reason,\n  boolean allowPending...Lookup,\n  PendingIntentRecord origi...Intent,\n  boolean allowBackgroundActivityStart\n)
+    activate starter
+    note left
+    **1144@ActivityStarter.java**
+    实参(
+      caller =
+        ActivityThread#mAppThread,
+      callingUid =
+        DEFAULT_CALLING_UID,
+      callingPackage =
+        "com.faustusz.myapplication",
+      requestRealCallingPid =
+        DEFAULT_REAL_CALLING_PID,
+      requestRealCallingUid =
+        DEFAULT_REAL_CALLING_UID,
+      intent = theIntent,
+      resolvedType = null,
+      voiceSession = null,
+      voiceInteractor = null,
+      resultTo =
+        ActivityClientRecord#token,
+      resultWho =
+        ActivityClientRecord#embeddedID,
+      requestCode = -1,
+      startFlags = 0,
+      profilerInfo = null,
+      outResult = null,
+      globalConfig = null,
+      options =
+        SafeActivityOptions {
+            mOriginalCallingPid 
+                = Binder.getCallingPid();
+            mOriginalCallingUid
+                = Binder.getCallingUid();
+            mOriginalOptions = null
+        },
+      ignoreTargetSecurity = false,
+      userId
+      [不知道userId最后被赋值成了什么,像屎一样]
+      inTask = null,
+      reason = "startActivityAsUser",
+      allowPending...Lookup
+        = true,
+      origi...Intent
+        = null,
+      allowBackgroundActivityStart
+        = false
+    )
+    实参的推理要涉及mRequest域的默认值,
+    代码:
+    830@ActivityTaskManagerService.java
+    122@ActivityStartController.java
+    262@ActivityStarter.java
+    279@ActivityStarter.java
+    440@ActivityStarter.java
+    447@ActivityStarter.java
+    1764@ActivityStarter.java
+    1804@ActivityStarter.java
+    363@ActivityStarter.java
+    也都是像屎一样
+    end note
+    note right
+    **1177-1192@ActivityStarter.java**
+    根据theIntent携带的信息判断要启动的
+    Activity是不是在短时(Instant)App中
+    关键代码在
+    24070@PackageManagerService.java
+    一般情况下ephemeralIntent#mComponent
+    不会被置为null,
+    componentSpecified也不会被置为true
+    **1194-1225@ActivityStarter.java**
+    解析出相关的ResolveInfo和ActivityInfo
+    PackageManagerService#resolveIntentInternal
+    [6471@PackageManagerService.java]
+    可以对theIntent中的内容解析找到记录中有过的
+    ResolveInfo乃至其对应的Activity对应的
+    ActivityInfo, 这是确定目标Activity的
+    初步
+    **1236-1295@ActivityStarter.java**
+    对一种特殊的heavy-weight进程的处理, 似乎
+    不必理会
+    **1298-1303@ActivityStarter.java**
+    启动Activity的进一步操作    
+    end note
+        starter -> spv : resolveActivity(\n  Intent intent,\n  ResolveInfo rInfo,\n  int startFlags,\n  ProfilerInfo profilerInfo\n)
+        activate spv
+        note right
+        Collect information about
+        the target of the Intent.
+        根据Intent收集Activity的信息.
+        当Intent是显式时, Intent已经
+        有了目标Activity的信息, 但如果
+        是隐式的, 就需要用过
+        ActivityStackSupervisor#
+        resolveActivity()来匹配
+        end note
+        spv --> starter
+        deactivate spv
+
+        starter -> starter : startActivity(\n  IApplicationThread caller,\n  Intent intent,\n  Intent ephemeralIntent,\n  String resolvedType,\n  ActivityInfo aInfo,\n  ResolveInfo rInfo,\n  IVoiceInteractionSession voiceSession,\n  IVoiceInteractor voiceInteractor,\n  IBinder resultTo,\n  String resultWho,\n  int requestCode,\n  int callingPid,\n  int callingUid,\n  String callingPackage,\n  int realCallingPid,\n  int realCallingUid,\n  int startFlags,\n  SafeActivityOptions options,\n  boolean ignoreTargetSecurity,\n  boolean componentSpecified,\n  ActivityRecord[] outActivity,\n  TaskRecord inTask,\n  String reason,\n  boolean allowPending...Lookup,\n  PendingIntentRecord origi...Intent,\n  boolean allowBackgroundActivityStart\n)
+        activate starter
+        note left
+        **568@ActivityStarter.java**
+        实参(
+          caller = 
+            ActivityThread#mAppThread,
+          intent 和theIntent内容一致,
+          ephemeralIntent 内容和theIntent一致,
+          resolvedType 不懂 可能是null吧,
+          aInfo 目标Activity的ActivityInfo,
+          rInfo theIntent内容对应的ResolveInfo,
+          voiceSession = null,
+          voiceInteractor = null,
+          resultTo = ACR#token,
+          resultWho = ACR#embeddedID,
+          requestCode = -1,
+          callingPid = Binder.getCallingPid,
+          callingUid = Binder.getCallingUid,
+          callingPackage =
+            "com.faustusz.myapplication",
+          realCallingPid =
+            Binder.getCallingPid(),
+          realCallingUid =
+            Binder.getCallingUid(),
+          startFlags = 0,
+          options 不懂,
+          ignoreTargetSecurity = false,
+          componentSpecified 感觉像是true,
+          outActivity =
+            new ActivityRecord[1],
+          inTask = null,
+          reason = "startActivityAsUser",
+          allowPending...Lookup
+            = true,
+          origi...Intent
+            = null,
+          allowBackgroundActivityStart
+            = false
+        )
+        end note
+            starter -> starter : startActivity(\n  IApplicationThread caller,\n  Intent intent,\n  Intent ephemeralIntent,\n  String resolvedType,\n  ActivityInfo aInfo,\n  ResolveInfo rInfo,\n  IVoiceInteractionSession voiceSession,\n  IVoiceInteractor voiceInteractor,\n  IBinder resultTo,\n  String resultWho,\n  int requestCode,\n  int callingPid,\n  int callingUid,\n  String callingPackage,\n  int realCallingPid,\n  int realCallingUid,\n  int startFlags,\n  SafeActivityOptions options,\n  boolean ignoreTargetSecurity,\n  boolean componentSpecified,\n  ActivityRecord[] outActivity,\n  TaskRecord inTask,\n  boolean allowPending...Lookup,\n  PendingIntentRecord origi...Intent,\n  boolean allowBackgroundActivityStart\n)
+            activate starter
+            note left
+            **613@ActivityStarter.java**
+            实参(
+              caller = 
+                ActivityThread#mAppThread,
+              intent 和theIntent内容一致,
+              ephemeralIntent 内容和theIntent一致,
+              resolvedType 不懂 可能是null吧,
+              aInfo 目标Activity的ActivityInfo,
+              rInfo theIntent内容对应的ResolveInfo,
+              voiceSession = null,
+              voiceInteractor = null,
+              resultTo = ACR#token,
+              resultWho = ACR#embeddedID,
+              requestCode = -1,
+              callingPid =
+                Binder.getCallingPid(),
+              callingUid =
+                Binder.getCallingUid(),
+              callingPackage =
+                "com.faustusz.myapplication",
+              realCallingPid =
+                Binder.getCallingPid(),
+              realCallingUid =
+                Binder.getCallingUid(),
+              startFlags = 0,
+              options 不懂,
+              ignoreTargetSecurity = false,
+              componentSpecified 感觉像是true,
+              outActivity =
+                ActivityStarter#mLastStartActivityRecord,
+                (mLastStartActivityRecord[0] = null)
+              inTask = null,
+              allowPending...Lookup
+                = true,
+              origi...Intent
+                = null,
+              allowBackgroundActivityStart
+                = false
+            )
+            end note
+            note right
+            **628-640@ActivityStarter.java**
+            根据caller信息获取对应的
+            WindowProcessController对象
+            ActivityTaskManagerService#mProcessNames
+            ProcessMap<WindowProcessController>#mMap
+            还可以推测, 一个pkgName可以有多个uid, 每个
+            uid又对应一个WindowProcessController, WPC
+            又对应一个IApplicationThread
+            **650-661@ActivityStarter.java**
+            根据MainActivity对应的ACR#token在
+            RootActivityContainer#mActivityDisplays
+            ActivityDisplay#mStacks
+            ActivityStack#mTaskHistory
+            TaskRecord#mActivities
+            中找到MainActivity对应的ActivityRecord对象
+            sourceRecord
+            **829-885@ActivityStarter.java**
+            这个似乎权限有关, 普通Activity打开前不需要
+            进一步确认, 所以不必理会. 这里的逻辑主要涉及
+            23853@PackageManagerService.java及
+            1935@PermissionManagerService.java
+            **887-899@ActivityStarter.java**
+            主要涉及短时App, 一般也不会进入
+            **901-904@ActivityStarter.java**
+            新建ActivityRecord对象
+            通过intent, aInfo基本就可以定义一个唯一的
+            ActivityRecord了
+            **935-936@ActivityStarter.java**
+            调用下一步的启动操作
+            end note
+
+                alt resultTo != null
+                    starter -> root : isInAnyStack(\n  IBinder token\n)
+                    activate root
+                    note left
+                    实参为resultTo
+                    即MainActivity对应的
+                    ACR#token
+                    **首先**, 按照如下顺序
+                    RootActivityContainer ->
+                    ActivityDisplay ->
+                    ActivityStack
+                    遍历每一个stack对象;
+                    **然后**, 找到访问到一个stack
+                    对象后, 通过token找到其对应的
+                    ActivityRecord对象;
+                    **最后**, 判断ActivityRecord和
+                    此ActivityStack是否是唯一对
+                    应的, 若成立则返回此
+                    ActivityRecord, 赋值给局部变量
+                    **sourceRecord**
+                    end note
+                    root -> starter : return ActivityRecord
+                    deactivate root
+                end
+
+                create r
+                starter -> r : new
+                activate r
+                r --> starter : return ActivityRecord
+                deactivate r
+
+                starter -> starter : startActivity(\n  final ActivityRecord r,\n  ActivityRecord sourceRecord,\n  IVoiceInteractionSession voiceSession,\n  IVoiceInteractor voiceInteractor,\n  int startFlags,\n  boolean doResume,\n  ActivityOptions options,\n  TaskRecord inTask,\n  ActivityRecord[] outActivity,\n  boolean restrictedBgActivity\n)
+                activate starter
+                note left
+                **1396@ActivityStarter.java**
+                实参(
+                  r = 调用者中new的,
+                  sourceRecord =
+                    sourceRecord,
+                    [通过MainActivity的
+                    token找到的MainActivity
+                    对应的ActivityRecord]
+                  voiceSession = null,
+                  voiceInteractor = null,
+                  startFlags = 0,
+                  doResume = true,
+                  options = 不明所以,
+                  inTask = null,
+                  outActivity = 
+                    ActivityStarter#
+                    mLastStartActivityRecord,
+                    [同时在调用者中
+                    mLastStartActivityRecord[0]
+                        = r
+                    ],
+                  restrictedBgActivity = 不明
+                  [但是可以确定这个flag标识的是是否
+                  终止background Activity的start]
+                )
+                end note
+                note right
+                主要的就两行
+                **1403@ActivityStarter.java**
+                通过
+                ActivityTaskManagerService
+                  #mWindowManager
+                访问
+                WindowManagerService
+                  #mWindowPlacerLocked
+                调用
+                WindowSurfacePlacer
+                  #deferLayout()
+                推迟当前的Layout操作
+                **1404-1405@ActivityStarter.java**
+                调用下一步的启动操作
+                end note
+                    starter -> starter : startActivityUnchecked(\n  final ActivityRecord r,\n  ActivityRecord sourceRecord,\n  IVoiceInteractionSession voiceSession,\n  IVoiceInteractor voiceInteractor,\n  int startFlags,\n  boolean doResume,\n  ActivityOptions options,\n  TaskRecord inTask,\n  ActivityRecord[] outActivity,\n  boolean restrictedBgActivity\n)
+                    activate starter #Salmon
+                    note left
+                    **1474@ActivityStarter.java**
+                    实参(
+                      r = startActivity()@line613中new的,
+                      sourceRecord =
+                        sourceRecord,
+                        [通过MainActivity的
+                        token找到的MainActivity
+                        对应的ActivityRecord]
+                      voiceSession = null,
+                      voiceInteractor = null,
+                      startFlags = 0,
+                      doResume = true,
+                      options = 不明所以,
+                      inTask = null,
+                      outActivity = ActivityStarter#
+                      mLastStartActivityRecord,
+                      [mLastStartActivityRecord[0]
+                        = r],
+                      restrictedBgActivity = 不明
+                      [但是可以确定这个flag标识的是是否
+                      终止background Activity的start]
+                    )
+                    end note
+                    note right
+                    见每一个子步骤
+                    end note
+
+                        == 设置状态 ==
+
+                        starter -> starter : setInitialState(\n  ActivityRecord r,\n  ActivityOptions options,\n  TaskRecord inTask,\n  boolean doResume,\n  int startFlags,\n  ActivityRecord sourceRecord,\n  IVoiceInteractionSession voiceSession,\n  IVoiceInteractor voiceInteractor,\n  boolean restrictedBgActivity\n)
+                        activate starter
+                        note over r
+                        此ActivityRecord
+                        对象又被赋值给
+                        ActivityStarter#
+                        mStartActivity
+                        end note
+                        note left
+                        **1808@ActivityStarter.java**
+                        将入参设置到ActivityStarter
+                        的各个字段中:
+                        mStartActivity = 将要启动的
+                        Activity对应的ActivityRecord;
+                        mOptions = options;
+                        mSourceRecord = sourceRecord,
+                        [MainActivity对应的
+                        ActivityRecord]
+                        mDoResume = true,
+                        mLaunchMode = r.launchMode,
+                        mLaunchFlags等
+                        end note
+                            starter -> starter :  adjustLaunchFlagsToDocumentMode(\n  ActivityRecord r,\n  boolean launchSingleInstance,\n  boolean launchSingleTask,\n  int launchFlags\n)
+                            activate starter
+                            note right
+                            **2581@ActivityStarter.java**
+                            计算启动模式,结果赋给mLaunchFlags
+                            end note
+                            starter --> starter : return int
+                            deactivate starter
+                        starter --> starter
+                        deactivate starter
+
+                        starter -> starter : computeLaunchingTaskFlags()
+                        activate starter
+                        note left
+                        **1945@ActivityStarter.java**
+                        主要涉及或计算如下对象变量:
+                        mInTask
+                        mReuseTask
+                        mAddingToTask
+                        mLaunchFlags[FLAG_ACTIVITY_NEW_TASK]
+                        end note
+                        starter --> starter
+                        deactivate starter
+
+                        starter -> starter : computeSourceStack()
+                        activate starter
+                        note left
+                        **2029@ActivityStarter.java**
+                        根据mSourceRecord获取其
+                        对应的ActivityStack,
+                        为mSourceStack赋值
+                        (1)如果mSourceRecord不为null
+                        且mSourceRecord的状态不是
+                        finishing, 那么mSourceStack
+                        就是mSourceRecord所在的stack
+                        (2)如果mSourceRecord不为null
+                        但mSourceRecord的状态是
+                        finishing, 则mSourceRecord和
+                        mSourceStack都要设为null, 同时
+                        需要把原来task的信息保存到
+                        mNewTaskInfo和mNewTaskIntent
+                        end note
+                        starter --> starter
+                        deactivate starter
+
+                        starter -> starter : mIntent.setFlags(mLaunchFlags);
+                        activate starter
+                        note left
+                        mIntent作为Intent类型, 并不是本
+                        时序图重点描述的对象, 但又为了说明
+                        本流程,这里就以自传递消息的形式体现
+                        end note
+                        starter --> starter
+                        deactivate starter
+
+                        == reused activity阶段 ==
+
+                        starter -> starter : getReusableIntentActivity()
+                        activate starter
+                        note left
+                        **2064@ActivityStarter.java**
+                        判断即将启动的新Activity是否
+                        需要加入到已有的TaskRecord中.
+                        若需要, 则返回ActivityRecord
+                        对象, 此对象携带的TaskRecord
+                        就是新Activity需要加入的task;
+                        否则, 返回null.
+                       /**
+                        * Decide whether the new activity
+                        * should be inserted into an existing
+                        * task. Returns null if not or an 
+                        * ActivityRecord with the task into
+                        * which the new activity should be added.
+                        */
+                        以上时方法定义处的注释, 但是从方法名、方法体以及
+                        返回的结果在startActivityUnchecked中后续的使
+                        用来看, 这里都不是为了找到一个task. 方法如其名,
+                        此方法为了寻找root中是否存在可以复用的activity,
+                        那么就不用将mStartActivity加入到root中了
+                        end note
+                            alt mOptions != null && mOptions.getLaunchTaskId() != -1
+                                starter -> root : anyTaskForId(int id)
+                                activate root
+                                root --> starter : TaskRecord
+                                deactivate root
+                            else if putIntoExistingTask
+                                    alt LAUNCH_SINGLE_INSTANCE == mLaunchMode
+                                        starter -> root : findActivity(Intent intent, ActivityInfo info, boolean compareIntentFilters)
+                                        activate root
+                                        root --> starter : return ActivityRecord
+                                        deactivate root
+                                    else if (mLaunchFlags & FLAG_ACTIVITY_LAUNCH_ADJACENT) != 0
+                                        starter -> root : findActivity(Intent intent, ActivityInfo info, boolean compareIntentFilters)
+                                        activate root
+                                        root --> starter : return ActivityRecord
+                                        deactivate root
+                                    else
+                                        starter -> root : findTask(ActivityRecord r, int preferredDisplayId)
+                                        activate root
+                                        root --> starter : return ActivityRecord
+                                        deactivate root
+                                    end
+                            end
+                        starter --> starter : return ActivityRecord
+                        deactivate starter
+
+                        alt reusedActivity != null[这块的逻辑很关键, 因为一旦找到可以复用的activity, 那么后续处理就可以省略很多步骤]
+
+                            alt mStartActivity.getTaskRecord() == null && !clearTopAndResetStandardLaunchMode
+                                starter -> r : setTask(TaskRecord task)
+                                activate r
+                                note left
+                                **824@ActivityRecord.java**
+                                执行setTask(TaskRecord task)
+                                的判断条件
+                                clearTopAndResetStandardLaunchMode
+                                的含义不太清楚
+                                end note
+                                    r -> r : setTask(\n  TaskRecord task,\n  boolean reparenting\n)
+                                    activate r
+                                    note left
+                                    **833@ActivityRecord.java**
+                                    实参(
+                                      task
+                                        =
+                                        reusedActivity
+                                        .getTaskRecord(),
+                                      reparenting
+                                        = false
+                                    )
+                                    end note
+                                    note right
+                                    **834-837@ActivityRecord.java**
+                                    如果当前task和输入相同:do nothing
+                                    **840@ActivityRecord.java**
+                                    newStack = task.getStack()
+                                    **850@ActivityRecord.java**
+                                    ActivityStack#
+                                        onActivityAddedToStack(
+                                            this
+                                        )
+                                    **854@ActivityRecord.java**
+                                    this.task = task
+                                    end note
+
+                                        r -> r : getActivityStack()
+                                        activate r
+                                        note right
+                                        ActivityRecord只能通过所属的
+                                        TaskRecord寻找所属的
+                                        ActivityStack, 本身不存储
+                                        ActivityStack的信息
+                                        end note
+                                            alt task != null
+                                                r -> task : getStack()
+                                                activate task
+                                                task --> r : return ActivityStack
+                                                deactivate task
+                                            else
+                                                r --> r : return null
+                                            end
+                                        r --> r : return ActivityStack
+                                        deactivate r
+
+                                        alt oldStack != newStack
+                                        alt newStack != null
+                                        r -> stack : onActivityAddedToStack(\n  ActivityRecord r\n)
+                                        activate stack
+                                        stack --> r
+                                        deactivate stack
+                                        end
+                                        end
+                                    r --> r
+                                    deactivate r
+                                r --> starter
+                                deactivate r
+                            end
+
+                            starter -> starter : setTargetStackAndMoveToFrontIfNeeded(\n  ActivityRecord intentActivity\n)
+                            activate starter
+                            note left
+                            **2115@ActivityStarter.java**
+                            入参intentActivity即是的局部变量
+                            reusedActivity, 这里要根据
+                            reusedActivity来设置mTargetStack
+                            end note
+                            starter --> starter : return ActivityRecord
+                            deactivate starter
+
+                        end
+
+                        == 将mStartActivity <-> task <-> mTargetStack数据关系建立起来 ==
+
+                        alt mStartActivity.resultTo == null && mInTask == null && !mAddingToTask && (mLaunchFlags & FLAG_ACTIVITY_NEW_TASK) != 0
+                            starter -> starter : setTaskFromReuseOrCreateNewTask(\n TaskRecord taskToAffiliate\n)
+                            activate starter
+                            starter --> starter : int result
+                            deactivate starter
+                        else
+                            alt mSourceRecord != null
+                                starter -> starter : setTaskFromSourceRecord()
+                                activate starter
+                                    starter -> starter : mTargetStack = sourceStack
+                                    note left
+                                    以消息传递形式描述赋值操作
+                                    l=2412@ActivityStarter.java
+                                    局部变量sourceStack来自
+                                    mSourceRecord.getActivityStack();
+                                    end note
+                                    activate starter
+                                    starter --> starter
+                                    deactivate starter
+
+                                    starter -> stack : topTask()
+                                    note left
+                                    获取顶部task
+                                    l=1151@ActivityStack.java:
+                                    final int size = mTaskHistory.size();
+                                    if (size > 0) {
+                                        return mTaskHistory.get(size - 1);
+                                    }
+                                    return null;
+                                    end note
+                                    activate stack
+                                    stack --> starter : return TaskRecord
+                                    note left
+                                    返回值赋给局部变量topTask
+                                    end note
+                                    deactivate stack
+
+                                    alt topTask == sourceTask && mDoResume
+                                        starter -> stack : moveToFront("sourceStackToFront")
+                                        note left
+                                        在调用本方法前已经确保sourceTask
+                                        是mTargetStack的顶部task了.
+                                        而本方法则保证了stack是所属
+                                        display的顶部stack
+                                        end note
+                                        activate stack
+                                            stack -> stack : moveToFront(\n "sourceStackToFront",\n null\n)
+                                            activate stack
+                                                stack -> stack : 给movingTask赋值
+                                                note left
+                                                movingTask = task != null;
+                                                task时入参, 在本方法中为null
+                                                所以movingTask为false
+                                                end note
+
+                                                stack -> display : positionChildAtTop(\n this,\n !movingTask /* includingParents */,\n reason\n)
+                                                note left
+                                                所以实际入参为:
+                                                    this,
+                                                    true,
+                                                    "sourceStackToFront"
+                                                end note
+                                                activate display
+                                                    display -> display : positionChildAt(\n stack,\n mStacks.size(),\n includingParents,\n update...Reason\n)
+                                                    note left
+                                                    实参:
+                                                        mTargetStack,
+                                                        mStacks.size(),
+                                                        true,
+                                                        "sourceStackToFront"
+                                                    end note
+                                                    activate display
+                                                    display --> display
+                                                    deactivate display
+                                                display --> stack
+                                                deactivate display
+
+                                            stack --> stack
+                                            deactivate stack
+                                        stack --> starter
+                                        deactivate stack
+                                    end
+
+                                    starter -> starter : addOrReparentStartingActivity(\n TaskRecord parent,\n String reason\n) 
+                                    activate starter
+                                    note left
+                                    本方法另activity成为了目标
+                                    task的顶部activity
+                                    实参
+                                        sourceTask,
+                                        "setTaskFromSourceRecord"
+                                    局部变量sourceTask=
+                                    mSourceRecord.getTaskRecord();
+                                    end note
+                                        starter -> task : addActivityToTop(\n mStartActivit\n)
+                                        activate task
+                                            task -> task : addActivityAtIndex(\n mActivities.size(),\n mStartActivit\n)
+                                            activate task
+                                            task --> task
+                                            deactivate task
+                                        task --> starter
+                                        deactivate task
+                                    starter --> starter
+                                    deactivate starter
+
+                                starter --> starter : int result
+                                deactivate starter
+                            else
+                                alt mInTask != null
+                                    starter -> starter : setTaskFromInTask()
+                                    activate starter
+                                    starter --> starter : int result
+                                    deactivate starter
+                                else
+                                    starter -> starter : setTaskToCurrentTopOrCreateNewTask()
+                                    activate starter
+                                    starter --> starter : int result
+                                    deactivate starter
+                                end
+                            end
+                        end
+
+                        == 开始在mTargetStack中启动mStartActivity ==
+
+                        starter -> stack : startActivityLocked(\n  ActivityRecord r,\n  ActivityRecord focusedTopActivity,\n  boolean newTask,\n  boolean keepCurTransition,\n  ActivityOptions options\n)
+                        activate stack
+                        note left
+                        **3139@ActivityStack.java**
+                        实参(
+                            r = mStartActivity,
+                            focusedTopActivity = 
+                            通过RootActivityContainer#
+                            getTopDisplayFocusedStack()
+                            获取ActivityStack, 通过
+                            ActivityStack#getTopActivity()
+                            获取此对象,
+                            newTask = false,
+                            keepCurTransition = false
+                            [目前推测来看是默认值false],
+                            options = mOptions
+                            [仍旧是不明所以],
+                        )
+                        end note
+                        note right
+                        **3141@ActivityStack.java**
+                        调用r.getTaskRecord()但现在问题
+                        是不知道r#task是在什么时候设置的,
+                        设置成了什么, 会不会是null?
+                        后面涉及各种数据结构的修改, 目前还
+                        不太能看懂
+                        end note
+
+                            alt r.mAppWindowToken == null
+                                stack -> r : createAppWindowToken()
+                                activate r
+                                r --> stack
+                                deactivate r
+                            end
+
+                            stack -> task : setFrontOfTask()
+                            activate task
+                            task --> stack
+                            deactivate task
+
+                            alt (!isHomeOrRecentsStack() || numActivities() > 0) && allowMoveToFront
+                            note over stack
+                            transition animation
+                            and starting window
+                            end note
+
+                                stack -> stack : getDisplay()\n .mDisplayContent\n .prepareAppTransition(\n    transit,\n    keepCurTransition  \n)
+                                activate stack
+                                stack --> stack
+                                deactivate stack
+
+                                stack -> r : showStartingWindow(\n prev,\n newTask,\n isTaskSwitch(\n  r,\n  focusedTopActivity\n )\n)
+                                activate r
+                                    r -> r : addStartingWindow[l=1146]
+                                    activate r
+                                        r -> r : mAppWindowToken\n .addStartingWindow()
+                                        activate r
+                                        r --> r : return boolean
+                                        deactivate r
+                                    r --> r : return boolean
+                                    deactivate r
+                                r --> stack
+                                deactivate r
+
+                            end
+
+                        stack --> starter
+                        deactivate stack
+
+                        == 切换mStartActivity状态至ActivityStack#ActivityState#RESUMED == 
+                        alt mDoResume
+                            alt (!mTargetStack.isFocusable() || (topTaskActivity != null && topTaskActivity.mTaskOverlay && mStartActivity != topTaskActivity))
+                            note over starter
+                            If the activity is not focusable, we can't resume it
+                            we don't want to resume activities in a task that currently has an overlay
+                            end note
+                            
+                                starter -> stack : ensureActivitiesVisibleLocked(\n  ActivityRecord starting,\n  int configChanges,\n  boolean preserveWindows)
+                                activate stack
+                                stack --> starter
+                                deactivate stack
+
+                                starter -> starter : mTargetStack\n .getDisplay()\n .mDisplayContent\n .executeAppTransition();
+                                activate starter
+                                starter --> starter
+                                deactivate starter
+
+                            else
+                                starter -> root : resumeFocusedStacksTopActivities(\n  ActivityStack targetStack,\n  ActivityRecord target,\n  ActivityOptions targetOptions\n)
+                                activate root
+                                note left
+                                l=1746@ActivityStarter.java:
+                                    mTargetStack,
+                                    mStartActivity,
+                                    mOptions
+                                call:
+                                l=1145@RootActivityContainer.java
+                                end note
+
+                                    alt (targetStack != null && (targetStack.isTopStackOnDisplay() || getTopDisplayFocusedStack() == targetStack))
+                                        root -> stack : resumeTopActivityUncheckedLocked(\n  ActivityRecord prev,\n  ActivityOptions options\n)
+                                        activate stack
+                                        note left
+                                        l=1159@RootActivityContainer.java
+                                            target
+                                            targetOptions
+                                        call:
+                                        l=2567@ActivityStack.java
+                                        end note
+                                            stack -> stack : resumeTopActivityInnerLocked(\n  ActivityRecord prev,\n  ActivityOptions options\n)
+                                            activate stack
+                                            note left
+                                            2577@ActivityStack.java
+                                                prev,
+                                                options
+                                            2616@ActivityStack.java
+                                            为什么一个等待切换状态的
+                                            mStartActivity就成了prev了?
+                                            end note
+
+                                                stack -> stack :  topRunningActivityLocked(\n true /* focusableOnly */\n)
+                                                activate stack
+                                                note left
+                                                自顶向下遍历task:
+                                                对task返回的activity再判断
+                                                r.isFocusable()==true
+                                                end note
+
+                                                    stack -> task : topRunningActivityLocked()
+                                                    activate task
+                                                    note right
+                                                    自顶向下遍历activity:
+                                                    找到第一个满足如下条件的r:
+                                                    !r.finishing
+                                                        && r.okToShowLocked()
+                                                    end note
+                                                        task -> r : 访问r#finishing
+                                                        activate r
+                                                        r -> task : return boolean
+                                                        deactivate r
+
+                                                        task -> r : okToShowLocked()
+                                                        activate r
+                                                        r --> task : return boolean
+                                                        deactivate r
+                                                    task --> stack : return ActivityRecord
+                                                    deactivate task
+
+                                                    stack -> r : isFocusable()
+                                                    activate r
+                                                    r --> stack : return boolean
+                                                    deactivate r
+
+                                                stack --> stack : return ActivityRecord
+                                                note left
+                                                总结返回值ActivityRecord对象的特征:
+                                                r.finishing == false
+                                                &&
+                                                r.info.flags & FLAG_SHOW_FOR_ALL_USERS != 0
+                                                        || (mStackSupervisor.isCurrentProfileLocked(r.mUserId)
+                                                                && mAtmService.mAmInternal.isUserRunning(r.mUserId, 0))
+                                                &&
+                                                r.super.mFullConfiguration.windowConfiguration.mWindowingMode != WINDOWING_MODE_PINNED
+                                                        || (r.info.flags & FLAG_ALWAYS_FOCUSABLE) != 0
+                                                最后, 将返回的对象引用赋值给局部变量next
+                                                **RootActivityContainer#resumeFocusedStacksTopActivities(mTargetStack, mStartActivity, mOptions)**
+                                                **    -> mTargetStack.resumeTopActivityUncheckedLocked(mStartActivity, mOptions)**
+                                                **        -> mTargetStack.resumeTopActivityInnerLocked(mStartActivity, mOptions)**
+                                                **上面的调用过程中, 原本一直是主角的mStartActivity被传递成名为prev的对象. 最后系统真正启动的名为next的对象.**
+                                                **现在按照我的理解, 实际上RootActivityContainer#resumeFocusedStacksTopActivities参数里真正的主角是**
+                                                **mTargetStack. 而只要确保mStartActivity放在了mTargetStack的顶部, 那么prev和next指向的就是同一个对象.**
+                                                **而RootActivityContainer#resumeFocusedStacksTopActivities参数里的mStartActivity以及其改名后的prev**
+                                                **仅仅是个参考, 你给这个参数赋值null, mStartActivity照样会以next的面貌被成功启动**
+                                                end note
+                                                deactivate stack
+
+                                                stack -> display : pauseBackStacks(\n  boolean userLeaving,\n  ActivityRecord resuming,\n  boolean dontWait\n)
+                                                activate display
+                                                note left
+                                                l=2746@ActivityStack.java;
+                                                实参(
+                                                userLeaving =
+                                                    ,
+                                                resuming =
+                                                    next,
+                                                dontWait =
+                                                    false
+                                                )
+                                                end note
+                                                display --> stack : return boolean
+                                                deactivate display
+
+                                                alt !next.attachedToProcess()
+                                                    stack -> spv : startSpecificActivityLocked(next, true, true)
+                                                    activate spv
+                                                        spv -> atm_stub : getProcessController(\n r.processName,\n r.info.applicationInfo.uid\n)
+                                                        activate atm_stub
+                                                            alt uid != Process.SYSTEM_UID
+                                                                atm_stub -> atm_stub : mProcessNames.get(\n processName, uid\n)
+                                                                activate atm_stub
+                                                                atm_stub --> atm_stub : WindowProcessController
+                                                                deactivate atm_stub
+                                                            end
+                                                        atm_stub --> spv : return WindowProcessController
+                                                        note right
+                                                        返回值赋给局部变量wpc
+                                                        end note
+                                                        deactivate atm_stub
+
+                                                        alt wpc != null && wpc.hasThread()
+                                                            spv -> spv : realStartActivityLocked
+                                                            activate spv
+                                                                spv -> r : setProcess(proc)
+                                                                activate r
+                                                                r --> spv : 
+                                                                deactivate r
+
+                                                                spv -> spv : ClientTransaction.obtain
+                                                                note right
+                                                                用传递消息的
+                                                                形式表现一些
+                                                                操作步骤
+                                                                end note
+                                                                activate spv
+                                                                spv --> spv
+                                                                deactivate spv
+
+                                                                spv -> spv : ResumeActivityItem.obtain
+                                                                note right
+                                                                用传递消息的
+                                                                形式表现一些
+                                                                操作步骤
+                                                                end note
+                                                                activate spv
+                                                                spv --> spv
+                                                                deactivate spv
+
+                                                                spv -> atm_stub : getLifecycleManager()\n .scheduleTransaction(\n  clientTransaction\n )
+                                                                activate atm_stub
+                                                                atm_stub --> spv
+                                                                deactivate atm_stub
+                                                            spv --> spv : return boolean
+                                                            deactivate spv
+                                                        else
+                                                            spv -> spv : PooledLambda.obtainMessage()
+                                                            activate spv
+                                                            spv --> spv
+                                                            deactivate spv
+
+                                                            spv ->> atm_stub : mAmInternal.startProcess()[REGULAR_ZYGOTE]
+                                                            /'
+                                                            note right
+                                                            这里开始启动新进程了, 不想牵扯太多类
+                                                            和对象, 就暂时把调用关系写下来
+                                                            ActivityStackSupervisor
+                                                            -> ActivityTaskManagerService.mH.sendMessage(msg)
+                                                            |
+                                                            |
+                                                            some looper (I don't know which looper)
+                                                            -> ActivityTaskManagerService.mAmInternal.startProcess()[REGULAR_ZYGOTE]
+                                                               ActivityManagerService$LocalService.startProcess()
+                                                             -> ActivityManagerService.startProcessLocked[l=3045]
+                                                              -> ProcessList.startProcessLocked[l=1947]
+                                                               -> ProcessList.startProcessLocked[l=1939]
+                                                                -> ProcessList.startProcessLocked[l=1509]
+                                                                 -> ProcessList.startProcessLocked[l=1732]
+                                                                  -> ProcessList.startProcess[l=1894]
+                                                                   -> Process.start[l=536]
+                                                                    -> ZygoteProcess.start[l=316]
+                                                                     -> ZygoteProcess.startViaZygote[l=545]
+                                                                      -> ZygoteProcess.zygoteSendArgsAndGetResult[l=384]
+                                                                       -> ZygoteProcess.attemptUsapSendArgsAndGetResult[l=454]
+                                                                       -> ZygoteProcess.attemptZygoteSendArgsAndGetResult[l=425]
+                                                            end note
+                                                            '/
+                                                        end
+
+
+                                                    spv --> stack
+                                                    deactivate spv
+                                                end
+
+                                            stack --> stack : return boolean
+                                            deactivate stack
+                                        stack --> root : return boolean
+                                        deactivate stack
+                                    end
+
+                                root --> starter : return boolean
+                                deactivate root
+                            end
+                        end
+
+                    starter --> starter : return int
+                    deactivate starter
+                starter --> starter : return int
+                deactivate starter
+            starter --> starter : return int
+            deactivate starter
+        starter --> starter : return int
+        deactivate starter
+    starter --> starter : return int
+    deactivate starter
+starter --> atm_stub : return int
+deactivate starter
+@enduml

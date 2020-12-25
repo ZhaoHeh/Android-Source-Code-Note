@@ -1,0 +1,186 @@
+@startuml
+actor User as user
+participant MainActivity as main
+participant Activity as aty
+participant "mInstrumentation:\nInstrumentation" as istm
+participant "IActivityTaskManager.Stub.Proxy" as atm_pxy
+participant "ActivityTaskManagerService\n(IActivityTaskManager.Stub)" as atm_stub
+participant "ActivityStartController" as ascr
+participant "ActivityStarter" as astr
+
+
+
+user -> main : startActivity(Intent intent)
+activate main
+note left
+实参
+Intent theIntent =
+    new Intent(
+        this,
+        Main2Activity.class
+    );
+end note
+    main -> aty : startActivity(\n  Intent intent\n)
+    activate aty
+    note left
+    实参(theIntent)
+    end note
+        aty -> aty : startActivity(\n  Intent intent,\n  @Nullable Bundle options\n)
+        activate aty
+        note left
+        实参(theIntent, null)
+        end note
+        aty --> aty
+            aty -> aty : startActivityForResult(\n  @RequiresPermission Intent intent,\n  int requestCode\n)
+            activate aty
+            note left
+            实参(theIntent, -1)
+            end note
+                aty -> aty : startActivityForResult(\n  @RequiresPermission Intent intent,\n  int requestCode,\n  @Nullable Bundle options\n)
+                activate aty
+                note left
+                实参(theIntent, -1, null)
+                end note
+                    note over istm
+                    Activity类中的mInstrumentation在
+                    Activity#attach方法(7700@Activity.java)
+                    中被赋值, 此方法在ActivityThread#performLaunchActivity
+                    方法中被调用(3243@ActivityThread.java)
+                    end note
+                    aty -> istm : execStartActivity(\n  Context who,\n  IBinder contextThread,\n  IBinder token,\n  Activity target,\n  Intent intent,\n  int requestCode,\n  Bundle options\n)
+                    activate istm
+                    note left
+                    实参(
+                        MainActivity.this,
+                        mMainThread.getApplicationThread(),
+                        mToken,
+                        MainActivity.this,
+                        theIntent,
+                        -1,
+                        null
+                    )
+                    进一步追踪:
+                    mMainThread和mToken在Activity#attach中被赋值,
+                    进一步追踪: (
+                        MainActivity.this,
+                        ActivityThread#mAppThread,
+                        ActivityClientRecord#token,
+                        MainActivity.this,
+                        theIntent,
+                        -1,
+                        null
+                    )
+                    说明: 这里的ActivityClientRecord是MainActivity
+                    被ActivityThread启动时, 其对应的ActivityClientRecord
+                    对象
+                    end note
+                        istm -> atm_pxy : startActivity(\n  in IApplicationThread caller,\n  in String callingPackage,\n  in Intent intent,\n  in String resolvedType,\n  in IBinder resultTo,\n  in String resultWho,\n  int requestCode,\n  int flags,\n  in ProfilerInfo profilerInfo,\n  in Bundle options\n)
+                        activate atm_pxy
+                        note left
+                        实参(
+                            ActivityThread#mAppThread,
+                            "com.faustusz.myapplication",
+                            theIntent,
+                            null,
+                            ActivityClientRecord#token,
+                            ActivityClientRecord#embeddedID
+                            -1,
+                            0,
+                            null,
+                            null
+                        )
+                        end note
+                            atm_pxy ->> atm_stub : startActivity(\n  in IApplicationThread caller,\n  in String callingPackage,\n  in Intent intent,\n  in String resolvedType,\n  in IBinder resultTo,\n  in String resultWho,\n  int requestCode,\n  int flags,\n  in ProfilerInfo profilerInfo,\n  in Bundle options\n)
+                            activate atm_stub
+                            note left
+                            实参同调用者
+                            end note
+                                atm_stub -> atm_stub : startActivityAsUser(\n  IApplicationThread caller,\n  String callingPackage,\n  Intent intent,\n  String resolvedType,\n  IBinder resultTo,\n  String resultWho,\n  int requestCode,\n  int startFlags,\n  ProfilerInfo profilerInfo,\n  Bundle bOptions,\n  int userId\n)
+                                activate atm_stub
+                                note left
+                                实参(
+                                    ActivityThread#mAppThread,
+                                    "com.faustusz.myapplication",
+                                    theIntent,
+                                    null,
+                                    ActivityClientRecord#token,
+                                    ActivityClientRecord#embeddedID
+                                    -1,
+                                    0,
+                                    null,
+                                    null,
+                                    Binder.getCallingUid()
+                                    [222@UserHandle.java]
+                                )
+                                end note
+                                    atm_stub -> atm_stub : startActivityAsUser(\n  IApplicationThread caller,\n  String callingPackage,\n  Intent intent,\n  String resolvedType,\n  IBinder resultTo,\n  String resultWho,\n  int requestCode,\n  int startFlags,\n  ProfilerInfo profilerInfo,\n  Bundle bOptions,\n  int userId,\n  boolean validateIncomingUser\n)
+                                    activate atm_stub
+                                    note left
+                                    实参(
+                                        ActivityThread#mAppThread,
+                                        "com.faustusz.myapplication",
+                                        theIntent,
+                                        null,
+                                        ActivityClientRecord#token,
+                                        ActivityClientRecord#embeddedID,
+                                        -1,
+                                        0,
+                                        null,
+                                        null,
+                                        Binder.getCallingUid(),
+                                        true
+                                    )
+                                    end note
+                                        atm_stub -> ascr : obtainStarter(\n  Intent intent,\n  String reason\n)
+                                        activate ascr
+                                        ascr --> atm_stub : return ActivityStarter
+                                        deactivate ascr
+                                        note over astr
+                                        在ActivityStarter#execute执行前
+                                        其参数已经通过set方法设置, 全部列出如下:
+                                        mRequest.intent = theIntent;
+                                        mRequest.reason = "startActivityAsUser";
+                                        mRequest.caller = ActivityThread#mAppThread;
+                                        mRequest.callingPackage = "com.faustusz.myapplication";
+                                        mRequest.resolvedType = null;
+                                        mRequest.resultTo = ActivityClientRecord#token;
+                                        mRequest.resultWho = ActivityClientRecord#embeddedID;
+                                        mRequest.requestCode = -1;
+                                        mRequest.startFlags = 0;
+                                        mRequest.profilerInfo = null;
+                                        mRequest.activityOptions = new SafeActivityOptions(null) 
+                                            = SafeActivityOptions {
+                                                mOriginalCallingPid = Binder.getCallingPid();
+                                                mOriginalCallingUid = Binder.getCallingUid();
+                                                mOriginalOptions = null;
+                                            }
+                                        mRequest.mayWait = true;
+                                        mRequest.userId = userId;
+                                        [不知道userId最后被赋值成了什么, 像屎一样]
+                                        end note
+                                        atm_stub -> astr : execute()
+                                        activate astr
+                                        astr --> atm_stub : return int
+                                        deactivate astr
+
+                                    atm_stub --> atm_stub : return int
+                                    deactivate atm_stub
+                                atm_stub --> atm_stub : return int
+                                deactivate atm_stub
+                            atm_stub --> atm_pxy : return int
+                            deactivate atm_stub
+                        atm_pxy --> istm : return int
+                        deactivate atm_pxy
+                    istm --> aty : return ActivityResult
+                    deactivate istm
+                aty --> aty
+                deactivate aty
+            aty --> aty
+            deactivate aty
+        deactivate aty
+    aty --> main
+    deactivate aty
+main --> user
+deactivate main
+
+@enduml

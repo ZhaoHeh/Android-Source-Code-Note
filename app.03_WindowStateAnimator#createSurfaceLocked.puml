@@ -1,0 +1,284 @@
+@startuml
+
+
+actor binder
+participant "Session\n:IWindowSession.Stub" as ssn
+
+participant "WindowManagerService\n:IWindowManager.Stub" as wms
+participant "WindowStateAnimator" as wsa
+participant "mSurfaceController\nof WindowStateAnimator\n:WindowSurfaceController" as wsfc
+
+
+participant "mWin\nof WindowStateAnimator\n:WindowState" as win
+participant "mParent\nof WindowState\n:WindowContainer" as parent
+participant "SurfaceControl.Builder" as builder
+
+
+participant "mSurfaceControl\nof WindowSurfaceController\n:SurfaceControl" as sfc_
+
+participant "SurfaceSession" as sfssn
+participant "SurfaceComposerClient[C++]" as cmp_client
+participant "mNativeObject\nof SurfaceControl\n:SurfaceControl[C++]" as sfc_cpp_
+participant "mClient\nof SurfaceComposerClient\n:BpSurfaceComposerClient[C++]\n:SafeBpInterface<ISurfaceComposerClient>" as icmp_client
+participant "Client[C++]\n:BnSurfaceComposerClient[C++]" as client
+participant "SurfaceFlinger[C++]" as flg
+participant "Factory[C++]\n:surfaceflinger::Factory" as factory
+participant "BufferQueueLayer[C++]" as bqlayer
+participant "mProducer\nof BufferQueueLayer\nMonitoredProducer[C++]:\nBnGraphicBufferProducer[C++]" as gbp
+
+
+
+
+
+/'frameworks/base/services/core/java/com/android/server/wm/WindowManagerService.java'/
+/'frameworks/base/services/core/java/com/android/server/wm/WindowState.java'/
+/'frameworks/base/services/core/java/com/android/server/wm/WindowStateAnimator.java'/
+/'frameworks/base/services/core/java/com/android/server/wm/WindowSurfaceController.java'/
+
+/'frameworks/base/core/java/android/view/Surface.java'/
+/'frameworks/base/core/jni/android_view_Surface.cpp'/
+/'https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/jni/android_view_Surface.cpp;l=336?q=android_view_Surface.cpp'/
+
+/'frameworks/base/core/java/android/view/SurfaceControl.java'/
+/'frameworks/base/core/jni/android_view_SurfaceControl.cpp'/
+/'https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/jni/android_view_SurfaceControl.cpp;l=178;bpv=0;bpt=1'/
+
+/'frameworks/base/core/java/android/view/SurfaceSession.java'/
+/'frameworks/base/core/jni/android_view_SurfaceSession.cpp'/
+
+/'frameworks/native/libs/gui/SurfaceComposerClient.cpp'/
+/'frameworks/native/libs/gui/ISurfaceComposerClient.cpp'/
+/'frameworks/native/services/surfaceflinger/Client.cpp'/
+/'frameworks/native/services/surfaceflinger/SurfaceFlinger.cpp'/
+/'frameworks/native/services/surfaceflinger/SurfaceFlingerFactory.cpp;l=43'/
+/'frameworks/native/services/surfaceflinger/BufferQueueLayer.cpp;l=36'/
+
+/'frameworks/native/libs/gui/SurfaceControl.cpp'/
+
+
+
+binder -> ssn : relayout
+activate ssn
+
+ssn -> wms : relayoutWindow
+activate wms
+
+wms -> wms : createSurfaceControl
+activate wms
+
+wms -> wsa : createSurfaceLocked(\n int windowType,\n int ownerUid\n)
+activate wsa
+
+    alt mSurfaceController != null
+        wsa --> wms : WindowSurfaceController
+    else
+        create wsfc
+        wsa -> wsfc : new
+        activate wsfc
+            wsfc -> win : makeSurface()
+            note left
+            超类WindowContainer方法
+            end note
+            activate win
+                win -> win : getParent()
+                note left
+                超类WindowContainer方法
+                end note
+                activate win
+                win --> win : WindowContainer#mParent
+                note left
+                **???*
+                WindowContainer#mParent
+                是在什么时候设置的?
+                end note
+                deactivate win
+
+                win -> parent : makeChildSurface(this)
+                activate parent
+                parent --> win : SurfaceControl.Builder
+                deactivate parent
+            win --> wsfc : SurfaceControl.Builder
+            deactivate win
+
+            wsfc -> win : getSurfaceControl()
+            note left
+            **???**
+            WindowState中的mSurfaceControl
+            是什么时候实例化的?
+            end note
+            activate win
+            win --> wsfc : WindowContainer#mSurfaceControl
+            deactivate win
+
+            wsfc -> builder : setParent(@Nullable SurfaceControl parent)
+            note left
+            **???**
+            为什么SurfaceControl需要parent?
+            end note
+            activate builder
+            builder --> wsfc : SurfaceControl.Builder
+            deactivate builder
+
+            wsfc -> builder : build()
+            activate builder
+                create sfc_
+                builder -> sfc_ : new
+                activate sfc_
+                    sfc_ -> sfc_ : nativeCreate
+                    note left
+                    session, name, w, h, format, flags,
+                    parent != null ? parent.mNativeObject : 0,
+                    metaParcel
+                    end note
+                    activate sfc_
+
+                        note over sfssn
+                        SurfaceSession是从哪里实例化的呢?
+                        是不是在WindowState获取SurfaceSession对象
+                        的时候都要通过DisplayContent呢?
+                        同时我还要知道SurfaceSession#mNativeClient
+                        所指向的SurfaceComposerClient对象是怎么来的
+                        end note
+                        sfc_ -> sfssn : android_view_SurfaceSession_getClient
+                        activate sfssn
+                        note left
+                        详见:
+                        l=184@android_view_SurfaceControl.cpp
+                        l=36@android_view_SurfaceSession.cpp
+                        end note
+                        sfssn --> sfc_ : sp<SurfaceComposerClient>
+                        deactivate sfssn
+
+                        sfc_ -> cmp_client : createSurfaceChecked
+                        activate cmp_client
+                            cmp_client -> icmp_client : createSurface
+                            activate icmp_client
+                                icmp_client -[#Green]>> client : createSurface(
+                                note left
+                                binder IPC
+                                end note
+                                activate client
+                                    client -> flg : createLayer
+                                    activate flg
+
+                                        alt flags & ISurfaceComposerClient::eFXSurfaceMask\n  == ISurfaceComposerClient::eFXSurfaceBufferQueue
+                                            flg -> flg : createBufferQueueLayer
+                                            activate flg
+                                                flg -> flg : getFactory()
+                                                activate flg
+                                                flg --> flg : surfaceflinger::Factory&
+                                                deactivate flg
+
+                                                flg -> factory : createBufferQueueLayer
+                                                activate factory
+                                                    create bqlayer
+                                                    factory -> bqlayer : new
+                                                    activate bqlayer
+                                                    bqlayer --> factory : BufferQueueLayer
+                                                    deactivate bqlayer
+                                                factory --> flg : sp<BufferQueueLayer>
+                                                deactivate factory
+
+                                                flg -> bqlayer : onFirstRef()
+                                                note left
+                                                SurfaceFlinger::createBufferQueueLayer
+                                                函数中的局部变量layer为强指针类型
+                                                sp<BufferQueueLayer>,
+                                                当BufferQueueLayer类型首次被强指针
+                                                引用时执行onFirstRef()
+                                                end note
+                                                activate bqlayer
+                                                    create gbp
+                                                    bqlayer -> gbp : new
+                                                    activate gbp
+                                                    gbp --> bqlayer : MonitoredProducer
+                                                    deactivate gbp
+                                                bqlayer --> flg
+                                                deactivate bqlayer
+
+                                                flg -> bqlayer : setDefaultBufferProperties(\n w, h, format\n)
+                                                activate bqlayer
+                                                bqlayer --> flg : status_t
+                                                deactivate bqlayer
+
+                                                alt err == NO_ERROR
+                                                    flg -> bqlayer : getHandle()
+                                                    activate bqlayer
+                                                    bqlayer --> flg : sp<IBinder> handle
+                                                    deactivate bqlayer
+
+                                                    flg -> bqlayer : getProducer()
+                                                    activate bqlayer
+                                                    bqlayer --> flg : sp<IGraphicBufferProducer> gbp = BufferQueueLayer::mProducer
+                                                    deactivate bqlayer
+                                                end
+
+                                            flg --> flg : status_t, sp<IBinder> handle, sp<IGraphicBufferProducer> gbp, sp<Layer>
+                                            deactivate flg
+                                        end
+
+                                        flg -> flg : addClientLayer
+                                        activate flg
+                                            flg -> client : attachLayer(handle, lbc)
+                                            activate client
+                                            client --> flg
+                                            deactivate client
+                                        flg --> flg : status_t
+                                        deactivate flg
+
+                                    flg --> client : status_t, sp<IBinder> handle, sp<IGraphicBufferProducer> gbp
+                                    deactivate flg
+                                client -[#Green]->> icmp_client : status_t, sp<IBinder> handle, sp<IGraphicBufferProducer> gbp
+                                deactivate client
+                            icmp_client --> cmp_client : status_t, sp<IBinder> handle, sp<IGraphicBufferProducer> gbp
+                            deactivate icmp_client
+
+                            create sfc_cpp_
+                            cmp_client -> sfc_cpp_ : new
+                            note left
+                            new消息的入参还包括
+                                sp<IBinder> handle
+                                sp<IGraphicBufferProducer> gbp
+                            end note
+                            activate sfc_cpp_
+                            sfc_cpp_ --> cmp_client : sp<SurfaceControl>
+                            deactivate sfc_cpp_
+
+                        cmp_client --> sfc_ : status_t, sp<SurfaceControl>
+                        deactivate cmp_client
+
+                        sfc_ -> sfc_ : 获取SurfaceControl[cpp]对象地址
+                        note left
+                        详见l=210@android_view_SurfaceControl.cpp:
+                        surface->incStrong((void *)nativeCreate);
+                        return reinterpret_cast<jlong>(surface.get());
+                        end note
+                        activate sfc_
+                        sfc_ --> sfc_ : long
+                        deactivate sfc_
+
+                    sfc_ --> sfc_ : long
+                    deactivate sfc_
+                sfc_ --> builder : SurfaceControl
+                deactivate sfc_
+            builder --> wsfc : SurfaceControl
+            deactivate builder
+
+        wsfc --> wsa : WindowSurfaceController
+        deactivate wsfc
+
+        wsa --> wms : WindowSurfaceController
+    end
+deactivate wsa
+
+wms --> wms : int
+deactivate wms
+
+wms --> ssn : int
+deactivate wms
+
+ssn --> binder
+deactivate ssn
+
+
+@enduml

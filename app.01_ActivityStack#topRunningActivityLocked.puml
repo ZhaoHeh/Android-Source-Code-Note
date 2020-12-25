@@ -1,0 +1,158 @@
+@startuml
+
+
+
+participant ActivityStack as stack
+participant "top TaskRecord in\nActivityStack#mTaskHistory" as task
+
+box "Internal Service" #LightPink
+    participant "top ActivityRecord in\nTaskRecord#mActivities" as r
+    participant ConfigurationContainer as container
+    participant WindowConfiguration as wcfg
+end box
+
+participant RootActivityContainer as root
+
+note over r
+说明: ActivityStack#topRunningActivityLocked获取的ActivityRecord对象的特点是, 字段具备如下条件:
+!r.finishing
+        && (r.info.flags & FLAG_SHOW_FOR_ALL_USERS) != 0
+                    || (mStackSupervisor.isCurrentProfileLocked(r.mUserId) && mAtmService.mAmInternal.isUserRunning(r.mUserId, 0))
+        && r.super.mFullConfiguration.windowConfiguration.mWindowingMode != WINDOWING_MODE_PINNED
+                    || (r.info.flags & FLAG_ALWAYS_FOCUSABLE) != 0
+end note
+
+stack -> stack : topRunningActivityLocked(true /* focusableOnly */)
+activate stack
+    stack -> task : topRunningActivityLocked()
+    activate task
+
+        task -> r : finishing
+        note left
+        ActivityRecord#finishing
+        是一个包内类型可访问的字段
+        这里以消息传递的形式来描述
+        但实际上没有发生函数调用
+        end note
+        note right
+        访问的字段:
+        r.finishing
+        l=1147@TaskRecord.java原始代码:
+        "if (!r.finishing && r.okToShowLocked())"
+        end note
+        activate r
+        r --> task : return boolean
+        deactivate r
+
+        task -> r :  okToShowLocked()
+        note right
+        访问的字段:
+        r.info.flags & FLAG_SHOW_FOR_ALL_USERS
+        r.mUserId
+        l=2508@ActivityRecord.java原始代码:
+        "
+        return (info.flags & FLAG_SHOW_FOR_ALL_USERS) != 0
+                || (mStackSupervisor.isCurrentProfileLocked(mUserId)
+                && mAtmService.mAmInternal.isUserRunning(mUserId, 0 /* flags */));
+        "        
+        end note
+        activate r
+        r --> task : return boolean
+        deactivate r
+
+    task --> stack : return ActivityRecord
+    deactivate task
+
+    stack -> r : isFocusable()
+    note right
+    l=1079@ActivityStack原始代码:
+    "if (r != null && (!focusableOnly || r.isFocusable()))"
+    根据传入的实际参数focusableOnly==true, 本方法一定会执行
+    end note
+    activate r
+
+        r -> r : isAlwaysFocusable()
+        note left
+        访问的字段:
+        r.info.flags
+        l=1498@ActivityRecord.java原始代码:
+        "return (info.flags & FLAG_ALWAYS_FOCUSABLE) != 0;"
+        end note
+        activate r
+        r --> r : return boolean
+        deactivate r
+
+        r -> r : super
+        note left
+        ActivityRecord#super
+        这里指的是ActivityRecord对象中的超类对象, 实际上这是一个类型转换的操作,
+        这里以消息传递的形式表现出来. 实际上本对象就是root#isFocusable()方法的
+        入参container. l=1365@ActivityRecord.java原始代码:
+        "return mRootActivityContainer.isFocusable(this, isAlwaysFocusable());"
+        end note
+        activate r
+        r --> r : return ConfigurationContainer
+        deactivate r
+
+        r -> root : isFocusable(ConfigurationContainer container, boolean alwaysFocusable)
+        activate root
+
+            root -> container : getWindowConfiguration()
+            note left
+            l=729@RootActivityContainer.java原始代码:
+            "return container.getWindowConfiguration().canReceiveKeys() || alwaysFocusable;"
+            end note
+            activate container
+            container --> root
+            deactivate container
+
+            root -> wcfg : canReceiveKeys()
+            note left
+            访问的字段:
+            r.super
+              .mFullConfiguration
+                .windowConfiguration
+                  .mWindowingMode
+            l=699@WindowConfiguration.java原始代码:
+            "return mWindowingMode != WINDOWING_MODE_PINNED;"
+            end note
+            activate wcfg
+            wcfg --> root
+            deactivate wcfg
+
+        root -> r : return boolean
+        deactivate root
+
+
+    r --> stack : return boolean
+    deactivate r
+
+stack --> stack : return ActivityRecord
+
+
+deactivate stack
+
+/'
+
+!r.finishing
+    && r.okToShowLocked()
+    && r.isFocusable()
+
+
+!r.finishing
+        && (info.flags & FLAG_SHOW_FOR_ALL_USERS) != 0
+                    || (mStackSupervisor.isCurrentProfileLocked(mUserId)
+                            && mAtmService.mAmInternal.isUserRunning(mUserId, 0 /* flags */))
+        && r.getWindowConfiguration().canReceiveKeys()
+                    || (info.flags & FLAG_ALWAYS_FOCUSABLE) != 0
+
+
+!r.finishing
+        && (r.info.flags & FLAG_SHOW_FOR_ALL_USERS) != 0
+                    || (mStackSupervisor.isCurrentProfileLocked(r.mUserId)
+                            && mAtmService.mAmInternal.isUserRunning(r.mUserId, 0))
+        && r.super.mFullConfiguration.windowConfiguration.mWindowingMode != WINDOWING_MODE_PINNED
+                    || (r.info.flags & FLAG_ALWAYS_FOCUSABLE) != 0
+'/
+
+@enduml

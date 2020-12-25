@@ -1,0 +1,37 @@
+@startuml
+
+
+
+class SurfaceFlinger
+        /'frameworks/native/services/surfaceflinger/SurfaceFlinger.h'/
+
+    std::unique_ptr<compositionengine::CompositionEngine> mCompositionEngine;
+
+class CompositionEngine
+        /'frameworks/native/services/surfaceflinger/CompositionEngine/include/compositionengine/CompositionEngine.h'/
+
+    HWComposer mHwComposer
+
+class android::impl::HWComposer
+
+    std::unique_ptr<HWC2::Device> mHwcDevice;
+
+class HWC2::Device
+        /'frameworks/native/services/surfaceflinger/DisplayHardware/HWC2.h'/
+
+    std::unique_ptr<android::Hwc2::Composer> mComposer;
+
+class Hwc2::impl::Composer
+
+    sp<V2_1::IComposer> mComposer;
+
+    /'
+    sp<V2_1::IComposerClient> mClient;
+    sp<V2_2::IComposerClient> mClient_2_2;
+    sp<IComposerClient> mClient_2_3;
+    '/
+
+class ??? V2_1::IComposer::getService(serviceName)
+
+
+@enduml

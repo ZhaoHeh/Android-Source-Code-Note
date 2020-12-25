@@ -1,0 +1,209 @@
+@startuml
+
+
+actor sMainLooper as main
+participant ViewRootImpl as vr
+participant "mSurface\nof ViewRootImpl\n:Surface" as sf
+participant "mNativeObject\nof Surface\n:Surface[C++]" as sf_cpp
+participant "mSurfaceControl\nof ViewRootImpl\n:SurfaceControl" as sfc
+participant "mNativeObject\nof SurfaceControl\n:SurfaceControl[C++]" as sfc_cpp
+/'frameworks/base/core/java/android/view/Surface.java'/
+/'frameworks/base/core/java/android/view/SurfaceControl.java'/
+participant "Session\n:IWindowSession.Stub " as ssn
+/'frameworks/base/services/core/java/com/android/server/wm/Session.java'/
+participant "WindowManagerService\n:IWindowManager.Stub" as wms
+/'frameworks/base/services/core/java/com/android/server/wm/WindowManagerService.java'/
+participant "WindowStateAnimator" as wsa
+/'frameworks/base/services/core/java/com/android/server/wm/WindowStateAnimator.java'/
+participant "mSurfaceController\nof WindowStateAnimator\n:WindowSurfaceController" as wsfcr
+/'frameworks/base/services/core/java/com/android/server/wm/WindowSurfaceController.java'/
+participant "mSurfaceControl\nof WindowSurfaceController\n:SurfaceControl" as sfc_
+participant "mNativeObject\nof SurfaceControl\n:SurfaceControl[C++]" as sfc_cpp_
+
+
+
+main -> vr : performTraversals()
+activate vr
+vr -> vr : relayoutWindow(\n WindowManager.LayoutParams params,\n int viewVisibility,\n boolean insetsPending\n)
+activate vr
+    vr ->> ssn : relayout
+    activate ssn
+        ssn -> wms : relayoutWindow
+        activate wms
+            alt shouldRelayout
+                wms -> wms :  createSurfaceControl(\n SurfaceControl outSurfaceControl,\n int result,\n WindowState win,\n WindowStateAnimator winAnimator\n)
+                activate wms
+
+                    wms -> wsa : createSurfaceLocked(\n int windowType,\n int ownerUid\n)
+                    activate wsa
+                        create wsfcr
+                        wsa -> wsfcr : new
+                        activate wsfcr
+                            note over sfc_
+                            l=110@WindowSurfaceController.java
+                            SurfaceControl的实例化没有这么简单, 这
+                            涉及到WindowState, DisplayContent, 
+                            DisplayContent#mSession,
+                            SurfaceSession
+                            WindowManagerService#makeSurfaceBuilder
+                            [l=7638k, l=878]
+                            WindowContainer之间的父子关系, WindowContainer
+                            和SurfaceSession的关系等等
+                            end note
+                            create sfc_
+                            wsfcr -> sfc_ : new
+                            activate sfc_
+                                create sfc_cpp_
+                                sfc_ -->> sfc_cpp_ : new
+                                note left
+                                native对象的创建是一个
+                                较为复杂的过程,
+                                这里的写法只是象征性的
+                                end note
+                                activate sfc_cpp_
+                                sfc_cpp_ -->> sfc_
+                                deactivate sfc_cpp_
+                            sfc_ --> wsfcr : SurfaceControl
+                            note left
+                            SurfaceControl对象赋值给
+                            WindowSurfaceController#mSurfaceControl
+                            end note
+                            deactivate sfc_
+                        wsfcr --> wsa : WindowSurfaceController
+                        note left
+                        new出来的WindowSurfaceController对象赋值给
+                        WindowStateAnimator#mSurfaceController
+                        end note
+                        deactivate wsfcr
+                    wsa --> wms : WindowSurfaceController
+                    note left
+                    WindowStateAnimator#mSurfaceController
+                    赋值给了WMS#createSurfaceControl方法中的
+                    局部变量surfaceController
+                    end note
+                    deactivate wsa
+
+                    wms -> wsfcr : getSurfaceControl(\n SurfaceControl outSurfaceControl\n)
+                    activate wsfcr
+                        wsfcr -> sfc : copyFrom(SurfaceControl other)
+                        note left
+                        入参other是
+                        WindowSurfaceController#mSurfaceControl
+                        end note
+                        activate sfc
+
+                            sfc -> sfc : mName = other.mName;\nmWidth = other.mWidth;\nmHeight = other.mHeight
+                            activate sfc
+                            sfc --> sfc
+                            deactivate sfc
+
+                            sfc -> sfc : nativeCopyFromSurfaceControl(\n other.mNativeObject\n)
+                            note left
+                            other.mNativeObjec保存的是
+                            other这一SurfaceControl对象
+                            对应的SurfaceControl[C++]对象
+                            的内存地址
+                            **???**
+                            WMS端的other对应的SurfaceControl[C++]对象
+                            的内存地址可以跨进程告诉应用端的
+                            ViewRootImpl#mSurfaceControl吗?
+                            二者应该不属于同一个虚拟机进程吧?
+                            end note
+                            activate sfc
+                                create sfc_cpp
+                                sfc -> sfc_cpp : new
+                                note left
+                                参数是other.mNativeObjec通过
+                                reinterpret_cast
+                                得到的sp<SurfaceControl>对象
+                                end note
+                                activate sfc_cpp
+                                    sfc_cpp -> sfc_cpp_ :  mClient = other->mClient;\nmHandle = other->mHandle;\nmGraphicBufferProducer = other->mGraphicBufferProducer;
+                                    activate sfc_cpp_
+                                    sfc_cpp_ --> sfc_cpp
+                                    deactivate sfc_cpp_
+                                sfc_cpp --> sfc : sp<SurfaceControl>
+                                deactivate sfc_cpp
+                            sfc --> sfc : long
+                            deactivate sfc
+
+                            sfc -> sfc : assignNativeObject
+                            activate sfc
+                            sfc --> sfc
+                            deactivate sfc
+
+                        sfc --> wsfcr
+                        deactivate sfc
+                    wsfcr --> wms
+                    deactivate wsfcr
+
+                wms --> wms : int
+                deactivate wms
+            end
+        wms --> ssn : int
+        deactivate wms
+    ssn -->> vr : int
+    deactivate ssn
+
+    alt mSurfaceControl.isValid()
+        vr -> sf : copyFrom(\n SurfaceControl other\n)
+        note left
+        入参是从WMS线程那一侧
+        通过binder机制传回来的
+        ViewRootImpl#mSurfaceControl
+        end note
+        activate sf
+            sf -> sf : nativeGetFromSurfaceControl
+            note left
+            实参:
+                mNativeObject,
+                other.mNativeObject
+            end note
+                sf -> sfc_cpp : createSurface()
+                activate sfc_cpp
+                    sfc_cpp -> sfc_cpp : generateSurfaceLocked
+                    activate sfc_cpp
+                        create sf_cpp
+                        sfc_cpp -> sf_cpp : new
+                        note right
+                        主要是把
+                        SurfaceControl::mGraphicBufferProducer
+                        赋值给
+                        Surface#mGraphicBufferProducer
+                        end note
+                        activate sf_cpp
+                        sf_cpp --> sfc_cpp : sp<Surface>
+                        deactivate sf_cpp
+                    sfc_cpp --> sfc_cpp : sp<Surface>
+                    deactivate sfc_cpp
+                sfc_cpp --> sf : sp<Surface>
+                deactivate sfc_cpp
+            activate sf
+            sf --> sf : long
+            deactivate sf
+        sf --> vr
+        deactivate sf
+    else
+        vr -> vr : destroySurface()
+        activate vr
+        vr --> vr
+        deactivate vr
+    end
+vr --> vr : int
+deactivate vr 
+vr --> main
+deactivate vr
+@enduml
+
+
+上面涉及到的类之间的关系:
+
+
+    DisplayContent -- SurfaceSession -- SurfaceComposerClient[C++] -- BpSurfaceComposerClient[C++] -- Client[C++](BnSurfaceComposerClient[C++])
+   _/
+ _/
+/
+activity -- WindowState -- WindowStateAnimator -- WindowSurfaceController -- SurfaceControl -- SurfaceContro[C++]
+    |
+    |
+ViewRootImpl -- SurfaceControl -- SurfaceContro[C++] -- Surface[C++] -- IGraphicBufferProducer -- MonitoredProducer[C++] -- 

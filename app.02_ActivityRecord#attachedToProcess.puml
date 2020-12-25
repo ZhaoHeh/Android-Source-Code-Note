@@ -1,0 +1,45 @@
+@startuml
+
+
+actor ActivityStack as stack
+participant ActivityRecord as r
+participant WindowProcessController as wpc
+
+note over r
+r#app != null
+    && r#app#mThread != null
+end note
+
+stack -> r : attachedToProcess()
+note right
+boolean attachedToProcess() {
+    return hasProcess() && app.hasThread();
+}
+end note
+activate r
+
+    r -> r : hasProcess()
+    note left
+    boolean hasProcess() {
+        return app != null;
+    }
+    end note
+    activate r
+    r --> r : boolean
+    deactivate r
+
+    r -> wpc : hasThread()
+    note left
+    boolean hasThread() {
+        return mThread != null;
+    }
+    end note
+    activate wpc
+    wpc --> r : boolean
+    deactivate wpc
+
+r --> stack : boolean
+deactivate r
+
+
+@enduml

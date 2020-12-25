@@ -1,0 +1,277 @@
+@startuml
+
+actor sMainLooper as Looper
+
+participant ActivityThread as at
+
+participant "mWindowManager:\nWindowManager\n(WindowManagerImpl)" as wm
+participant "mGlobal,\nsDefaultWindowManager:\nWindowManagerGlobal" as wmg
+participant ViewRootImpl as vri
+participant "sWindowManagerService:\nIWindowManager.Stub.Proxy" as wms_pxy
+participant "mWindowSession,\nsWindowSession:\nIWindowSession.Stub.Proxy" as session_pxy
+
+participant "Session:\nIWindowSession.Stub" as session_stub
+participant "WindowManagerService:\nIWindowManager.Stub" as wms_stub
+/'
+participant "PhoneWindowManager:\nWindowManagerPolicy" as phwm
+'/
+participant "WindowState" as win
+participant "mRoot:\nRootWindowContainer" as rwc
+participant "mDisplayManager:\nDisplayManager" as dmg
+/' /frameworks/base/core/java/android/hardware/display/DisplayManager.java '/
+participant "mGlobal:\nDisplayManagerGlobal" as dmg_g
+/' /frameworks/base/core/java/android/hardware/display/DisplayManagerGlobal.java '/
+participant "Display" as dply
+participant "mDm:\nIDisplayManager" as dm_pxy
+participant "DisplayManagerService$BinderService:\nIDisplayManager.Stub" as dm_stub
+/' /frameworks/base/core/java/android/hardware/display/IDisplayManager.aidl '/
+/' /frameworks/base/services/core/java/com/android/server/display/DisplayManagerService.java '/
+/' /frameworks/base/services/core/java/com/android/server/display/LogicalDisplay.java '/
+
+
+
+Looper -> at : handleResumeActivity
+activate at
+
+    at -> at : performResumeActivity(\n  token, finalStateRequest, reason\n)
+    activate at
+    at -> at : return r
+    deactivate at
+
+    alt r.window == null && !a.mFinished && willBeVisible
+    alt a.mVisibleFromClient
+    alt !a.mWindowAdded
+        at -> wm : addView
+        activate wm
+note over wmg
+mGlobal包含于WindowManagerImpl类中,
+由WindowManagerGlobal.sDefaultWindowManager
+赋值, sDefaultWindowManager是全局变量且单例,
+意味着其在应用进程范围内唯一的, path:
+/frameworks/base/core/java/android/view
+/WindowManagerGlobal.java
+end note
+            wm -> wmg : addView(\n  View view,\n  ViewGroup.LayoutParams params,\n  Display display,\n  Window parentWindow\n)
+            activate wmg
+            note left
+            根据代码上下文,
+            view的实参为一个Activity范围内唯一的DecorView对象
+            parentWindow的实参为Activity范围内唯一的PhoneWindow对象
+            end note
+note over vri
+ViewRootImpl对象通过mRoots记录在
+WindowManagerGlobal中
+end note
+                create vri
+                wmg -> vri : new
+                activate vri
+                    vri -> wmg : getWindowSession()
+                    activate wmg
+                        wmg -> wmg : getWindowManagerService()
+                        activate wmg
+note over wms_pxy
+sWindowManagerService是真正的WindowManagerService
+客户端, 是由WindowManagerGlobal保存的全局变量,
+此对象在应用进程范围内是唯一的
+end note
+                            create wms_pxy
+                            wmg -> wms_pxy : new
+                            activate wms_pxy
+                            wms_pxy --> wmg
+                            deactivate wms_pxy
+                        wmg --> wmg : return IWindowManager
+                        deactivate wmg
+                        wmg -> wms_pxy : openSession(\n  IWindowSessionCallback callback\n)
+                        activate wms_pxy
+                            wms_pxy ->> wms_stub : openSession(\n  IWindowSessionCallback callback\n)
+                            activate wms_stub
+                                create session_stub
+                                wms_stub -> session_stub : new
+                                activate session_stub
+                                session_stub --> wms_stub
+                                deactivate session_stub
+                            wms_stub --> wms_pxy : return IBinder
+                            deactivate wms_stub
+note over session_pxy
+mWindowSession包含于ViewRootImpl类中,
+由WindowManagerGlobal.sWindowSession
+赋值, sWindowSession是全局变量, 
+此对象也是应用进程范围内唯一的.
+sWindowSession是Binder客户端对象, 依据如下:
+在 IWindowSession$Stub$Proxy#openSession 中:
+_result = android.view.IWindowSession.Stub.
+asInterface(_reply.readStrongBinder());
+return _result;
+path: /out/target/common/obj/JAVA_LIBRARIES
+      /framework_intermediates/core/java
+      /android/view/IWindowManager.java
+end note
+                            create session_pxy
+                            wms_pxy -> session_pxy : new
+                            activate session_pxy
+                            session_pxy --> wms_pxy
+                            deactivate session_pxy
+
+                        wms_pxy --> wmg : return IWindowSession
+                        deactivate wms_pxy
+                    wmg --> vri : return IWindowSession
+                    deactivate wmg
+                vri --> wmg
+                deactivate vri
+
+                wmg -> vri : setView(\n  View view,\n  WindowManager.LayoutParams attrs,\n  View panelParentView\n)
+                activate vri
+                note left
+                view的实参为一个Activity
+                范围内唯一的DecorView对象
+                end note
+                    alt mView == null
+
+                        vri -> vri : requestLayout()
+                        activate vri
+                                    vri ->> vri : performTraversals()
+                                    activate vri
+                                    note left #LightBlue
+                                    Important!!!
+                                    异步调用
+                                    end note
+                                    vri --> vri
+                                    deactivate vri
+                        vri --> vri
+                        deactivate vri
+
+                        vri -> session_pxy : addToDisplay
+                        note left #Red
+                        Important!!!
+                        end note
+                        activate session_pxy
+                            session_pxy ->> session_stub : addToDisplay
+                            activate session_stub
+                                session_stub -> wms_stub : addWindow
+                                activate wms_stub
+/'
+note over phwm
+PhoneWindowManager实现
+WindowManagerPolicy接口
+end note
+                                    wms_stub -> phwm : checkAddPermission(\n  WindowManager.LayoutParams attrs,\n  int[] outAppOp\n)
+                                    activate phwm
+                                    note right
+                                    非系统窗口可以直接添加
+                                    TYPE_TOAST系统窗口也
+                                    可以直接添加
+                                    TYPE_PHONE, 
+                                    TYPE_SYSTYM_ERROR等系统窗口
+                                    需要权限检查
+                                    end note
+                                    phwm --> wms_stub : return int
+                                    deactivate phwm
+'/
+
+                                    wms_stub -> wms_stub : getDisplayContentOrCreate(\n  int displayId,\n  IBinder token\n)
+                                    activate wms_stub
+                                        wms_stub -> rwc : getDisplayContent(int displayId)
+                                        activate rwc
+                                        rwc --> wms_stub : return DisplayContent
+                                        deactivate rwc
+                                        alt displayContent == null
+                                            wms_stub -> dmg : getDisplay(int displayId)
+                                            activate dmg
+                                                dmg -> dmg : getOrCreateDisplayLocked(\n  int displayId,\n  boolean assumeValid\n)
+                                                activate dmg
+                                                note right : 实参为Display.DEFAULT_DISPLAY, false
+note over dmg_g
+DisplayManagerGlobal通过单例模式限定在
+每个应用进程内唯一, 其维护的Display需要
+在每个进程内新建, 但是服务端维护的LogicalDisplay
+则是系统内唯一
+path: /frameworks/base/core/java/android
+      /hardware/display/DisplayManagerGlobal.java
+end note
+                                                    dmg -> dmg_g : getCompatibleDisplay(\n  int displayId,\n  Resources resources\n)
+                                                    activate dmg_g
+
+                                                        dmg_g -> dmg_g : getDisplayInfo(int displayId)
+                                                        activate dmg_g
+                                                            dmg_g -> dm_pxy : getDisplayInfo(int displayId)
+                                                            activate dm_pxy
+                                                                dm_pxy ->> dm_stub : getDisplayInfo(int displayId)
+                                                                activate dm_stub
+                                                                    dm_stub -> DisplayManagerService : getDisplayInfoInternal(\n  int displayId,\n  int callingUid\n)
+                                                                    activate DisplayManagerService
+                                                                    note right
+                                                                    方法在DisplayManagerService.java 572 行
+                                                                    维护了一个SparseArray<LogicalDisplay>类型
+                                                                    的mLogicalDisplays, 根据Id获取LogicalDisplay
+                                                                    对象, 进而获取DisplayInfo
+                                                                    end note
+                                                                    DisplayManagerService --> dm_stub : return DisplayInfo
+                                                                    deactivate DisplayManagerService
+                                                                dm_stub --> dm_pxy : return DisplayInfo
+                                                                deactivate dm_stub
+                                                            dm_pxy --> dmg_g : return DisplayInfo
+                                                            deactivate dm_pxy
+                                                        dmg_g --> dmg_g : return DisplayInfo
+                                                        deactivate dmg_g
+
+                                                        create dply
+                                                        dmg_g -> dply : new
+                                                        activate dply
+                                                        dply --> dmg_g
+                                                        deactivate dply
+
+                                                    dmg_g --> dmg : return Display
+                                                    deactivate dmg_g
+                                                dmg --> dmg : return Display
+                                                deactivate dmg
+                                            dmg --> wms_stub : return Display
+                                            deactivate dmg
+
+                                            alt display != null
+                                                wms_stub -> rwc : createDisplayContent(\n  Display display,\n  ActivityDisplay activityDisplay\n)
+                                                activate rwc
+                                                note right
+                                                实参为display, null
+                                                ?? 对于new出来的dc
+                                                如何添加到mChildren中呢?
+                                                end note
+                                                rwc --> wms_stub : return DisplayContent
+                                                deactivate rwc
+                                            end
+
+                                        end
+                                    wms_stub --> wms_stub : return DisplayContent
+                                    deactivate wms_stub
+
+                                    create win
+                                    wms_stub -> win : new
+                                    activate win
+                                    win --> wms_stub
+                                    deactivate win
+
+
+                                wms_stub --> session_stub : return int
+                                deactivate wms_stub
+                            session_stub --> session_pxy : return int
+                            deactivate session_stub
+                        session_pxy --> vri : return int
+                        deactivate session_pxy
+
+                    end
+                vri --> wmg
+                deactivate vri
+
+            wmg --> wm
+            deactivate wmg
+        wm --> at
+        deactivate wm
+    end
+    end
+    end
+
+at --> Looper
+deactivate at
+
+
+
+@enduml

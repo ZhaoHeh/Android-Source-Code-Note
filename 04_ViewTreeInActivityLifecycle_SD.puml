@@ -1,0 +1,419 @@
+@startuml
+
+actor sMainLooper as Looper
+
+participant ActivityThread as at
+participant Instrumentation as istm
+participant MyActivity
+
+participant "mWindow:\nPhoneWindow" as phw
+participant "mDecor:\nDecorView" as decor
+participant "mLayoutInflater:\nLayoutInflater" as inflater
+
+participant "mWindowManager:\nWindowManager\n(WindowManagerImpl)" as wm
+participant "mGlobal,\nsDefaultWindowManager:\nWindowManagerGlobal" as wmg
+participant ViewRootImpl as vri
+participant "sWindowManagerService:\nIWindowManager.Stub.Proxy" as wms_pxy
+participant "mWindowSession,\nsWindowSession:\nIWindowSession.Stub.Proxy" as session_pxy
+
+participant "Session:\nIWindowSession.Stub" as session_stub
+participant "WindowManagerService:\nIWindowManager.Stub" as wms_stub
+
+
+
+Looper -> at : handleLaunchActivity
+activate at
+    at -> at : performLaunchActivity(\n  ActivityClientRecord r,\n  Intent customIntent\n)
+    activate at
+
+        at -> istm : newActivity
+        activate istm
+            create MyActivity
+            istm -> MyActivity : new
+            activate MyActivity
+            MyActivity --> istm
+            deactivate MyActivity
+        istm --> at : return Activity
+        deactivate istm
+
+        at -> MyActivity : attach
+        activate MyActivity
+note over phw
+mWindow包含于Activity类
+path: /frameworks/base/core/java/com/android
+      /internal/policy/PhoneWindow.java
+end note
+            create phw
+            MyActivity -> phw : new
+            activate phw
+note over inflater
+LayoutInflater对象由保存于
+SystemServiceRegistry#SYSTEM_SERVICE_FETCHERS
+中的CachedServiceFetcher<LayoutInflater>产生, 
+具有全局性质, 在整个应用进程中唯一
+end note
+                phw -> inflater : from
+                activate inflater
+                inflater --> phw : return PhoneLayoutInflater
+                deactivate inflater
+            phw --> MyActivity
+            deactivate phw
+
+            MyActivity -> phw : setWindowManager(\n  WindowManager wm,\n  IBinder appToken,\n  String appName,\n  boolean hardwareAccelerated\n)
+            activate phw
+            note left
+            PhoneWindow的setWindowManager方法
+            来自父类Window, 并未重写:
+            见frameworks/base/core/java/android/view/Window.java
+            end note
+            note right
+            public void setWindowManager(WindowManager wm, IBinder appToken, String appName,
+                    boolean hardwareAccelerated) {
+                /* 省略部分代码... */
+                if (wm == null) {
+                    wm = (WindowManager)mContext.getSystemService(Context.WINDOW_SERVICE);
+                }
+                mWindowManager = ((WindowManagerImpl)wm).createLocalWindowManager(this);
+            }
+
+            mContext.getSystemService获取的并非系统服务WindowManagerService的客户端
+            而仅仅是一个全局的WindowManagerImpl对象, 参看如下代码:
+                    registerService(Context.WINDOW_SERVICE, WindowManager.class,
+                            new CachedServiceFetcher<WindowManager>() {
+                        @Override
+                        public WindowManager createService(ContextImpl ctx) {
+                            return new WindowManagerImpl(ctx);
+                        }});
+            path: /frameworks/base/core/java/android/app/SystemServiceRegistry.java
+            path: /frameworks/base/core/java/android/app/ContextImpl.java
+            end note
+                create wm
+                phw -> wm : new
+                activate wm
+                    create wmg
+                    wm -> wmg : new
+                    activate wmg
+                    note right
+                    mGlobal是WindowManagerImpl的实例域
+                    (和类域相对), 在WindowManagerImpl
+                    实例化的时候被赋值, 如果此时是第一次
+                    调用WindowManagerGlobal.getInstance()
+                    sDefaultWindowManager将会被实例化
+                    end note
+                    wmg --> wm
+                    deactivate wmg
+                wm --> phw
+                deactivate wm
+            phw --> MyActivity
+            deactivate phw
+
+            MyActivity -> phw : getWindowManager()
+            activate phw
+            phw --> MyActivity : return WindowManager
+            deactivate phw
+note over wm
+经过上述一系列操作, PhoneWindow类中的mWindowManager被赋值,
+同时此对象又被赋值给Activity类中的mWindowManager, 此对象实
+际类型则是WindowManagerImpl, 其mParentWindow字段则指向的又
+是PhoneWindow对象, path:
+/frameworks/base/core/java/android/view/WindowManagerImpl.java
+end note
+        MyActivity --> at
+        deactivate MyActivity
+
+        at -> istm : callActivityOnCreate(\n  Activity activity,\n  Bundle icicle\n)
+        activate istm
+            istm -> MyActivity : performCreate(\n  Bundle icicle,\n  PersistableBundle persistentState\n)
+            activate MyActivity
+                MyActivity -> MyActivity : onCreate(\n  Bundle savedInstanceState\n)
+                note left : 生命周期回调
+                activate MyActivity #DimGray
+                    MyActivity -> MyActivity : setContentView(\n  @LayoutRes int layoutResID\n)
+                    activate MyActivity
+
+                        MyActivity -> phw : setContentView(\n  int layoutResID\n)
+                        activate phw
+                            alt mContentParent == null
+                                phw -> phw : installDecor()
+                                activate phw
+                                    alt mDecor == null
+                                        phw -> phw : generateDecor(int featureId)
+                                        activate phw
+                                        note left
+                                        为PhoneWindow的
+                                        mDecor赋值
+                                        end note
+                                            create decor
+                                            note over decor
+                                            mDecor字段包含于PhoneWindow类
+                                            end note
+                                            phw -> decor : new
+                                            activate decor
+                                            decor --> phw
+                                            deactivate decor
+                                        phw --> phw : return DecorView
+                                        deactivate phw
+                                    end
+                                    alt mContentParent == null
+                                        phw -> phw : generateLayout(DecorView decor)
+                                        note left
+                                        为PhoneWindow的
+                                        mContentParent
+                                        赋值
+                                        end note
+                                        activate phw
+                                        note right
+                                        layoutResource是onResourcesLoaded的入参,
+                                        在generateLayout中赋值, 指向是系统resource
+                                        path: /frameworks/base/core/res/res/layout/
+                                        end note
+note over inflater
+mLayoutInflater包含于PhoneWindow类
+end note
+                                            phw -> decor : onResourcesLoaded(\n  LayoutInflater inflater,\n  int layoutResource\n)
+                                            activate decor
+
+                                                decor -> inflater : inflate(layoutResource, null)
+                                                activate inflater
+                                                inflater --> decor : return View
+                                                deactivate inflater
+
+                                                decor -> decor : addView(\n  View child,\n  int index,\n  LayoutParams params\n)
+                                                activate decor
+                                                note left #LightPink
+                                                ViewGroup.addView方法
+                                                会调用requestLayout()
+                                                但此时还没有ViewRootImpl
+                                                构建, 会发生什么?
+                                                end note
+                                                decor --> decor
+                                                deactivate decor
+
+                                            decor --> phw
+                                            deactivate decor
+                                        phw --> phw : ViewGroup
+                                        deactivate phw
+                                    end
+                                phw --> phw
+                                deactivate phw
+                            end
+                            alt !hasFeature(FEATURE_CONTENT_TRANSITIONS)
+                                phw -> inflater : inflate(\n  layoutResID, mContentParent\n)
+                                activate inflater
+                                note left #LightPink
+                                layoutResID为
+                                APP中传入的如
+                                R.id.activity_main
+                                之类的id
+                                mContentParent
+                                和mDecor的关系
+                                仍不甚明白
+                                end note
+                                inflater --> phw
+                                deactivate inflater
+                            end
+                        phw --> MyActivity
+                        deactivate phw
+
+                        MyActivity -> MyActivity : initWindowDecorActionBar()
+                        activate MyActivity
+                        note right
+                        为Activity的mActionBar赋值
+                        end note
+                        MyActivity --> MyActivity
+                        deactivate MyActivity
+
+                    MyActivity --> MyActivity
+                    deactivate MyActivity
+                MyActivity --> MyActivity
+                deactivate MyActivity
+            MyActivity --> istm
+            deactivate MyActivity
+        istm --> at :
+        deactivate istm
+
+    at --> at : return Activity
+    deactivate at
+at --> Looper
+deactivate at
+
+Looper -> at : handleResumeActivity
+activate at
+
+    at -> at : performResumeActivity(\n  token, finalStateRequest, reason\n)
+    activate at
+        at -> MyActivity : performResume(r.startsNotResumed, reason)
+        activate MyActivity
+
+            MyActivity -> MyActivity : performRestart(true, reason)
+            activate MyActivity
+                alt start
+                    MyActivity -> MyActivity : performStart(reason)
+                    activate MyActivity
+                        MyActivity -> istm : callActivityOnStart(this)
+                        activate istm
+                            istm -> MyActivity : onStart
+                            note right : 生命周期回调
+                            activate MyActivity #DimGray
+                            MyActivity --> istm
+                            deactivate MyActivity
+                        istm --> MyActivity
+                        deactivate istm
+                    MyActivity --> MyActivity
+                    deactivate MyActivity
+                end
+            MyActivity --> MyActivity
+            deactivate MyActivity
+
+            MyActivity -> istm : callActivityOnResume
+            activate istm
+                istm -> MyActivity : onResume
+                note right : 生命周期回调
+                activate MyActivity #DimGray
+                MyActivity --> istm
+                deactivate MyActivity
+            istm --> MyActivity :
+            deactivate istm
+
+        MyActivity --> at
+        deactivate MyActivity
+    at -> at : return r
+    deactivate at
+
+    alt r.window == null && !a.mFinished && willBeVisible
+    alt a.mVisibleFromClient
+    alt !a.mWindowAdded
+        at -> wm : addView(@NonNull View view, @NonNull ViewGroup.LayoutParams params), 实参: decor = r.window.getDecorView(), l = r.window.getAttributes()
+        activate wm
+note over wmg
+mGlobal包含于WindowManagerImpl类中,
+由WindowManagerGlobal.sDefaultWindowManager
+赋值, sDefaultWindowManager是全局变量且单例,
+意味着其在应用进程范围内唯一的, path:
+/frameworks/base/core/java/android/view
+/WindowManagerGlobal.java
+end note
+            wm -> wmg : addView(\n  View view,\n  ViewGroup.LayoutParams params,\n  Display display,\n  Window parentWindow\n)
+            activate wmg
+            note left
+            根据代码上下文,
+            view的实参为一个Activity范围内唯一的DecorView对象
+            parentWindow的实参为Activity范围内唯一的PhoneWindow对象
+            end note
+note over vri
+ViewRootImpl对象通过mRoots记录在
+WindowManagerGlobal中
+end note
+                create vri
+                wmg -> vri : new
+                activate vri
+                    vri -> wmg : getWindowSession()
+                    activate wmg
+                        wmg -> wmg : getWindowManagerService()
+                        activate wmg
+note over wms_pxy
+sWindowManagerService是真正的WindowManagerService
+客户端, 是由WindowManagerGlobal保存的全局变量,
+此对象在应用进程范围内是唯一的
+end note
+                            create wms_pxy
+                            wmg -> wms_pxy : new
+                            activate wms_pxy
+                            wms_pxy --> wmg
+                            deactivate wms_pxy
+                        wmg --> wmg : return IWindowManager
+                        deactivate wmg
+                        wmg -> wms_pxy : openSession(\n  IWindowSessionCallback callback\n)
+                        activate wms_pxy
+                            wms_pxy ->> wms_stub : openSession(\n  IWindowSessionCallback callback\n)
+                            activate wms_stub
+                                create session_stub
+                                wms_stub -> session_stub : new
+                                activate session_stub
+                                session_stub --> wms_stub
+                                deactivate session_stub
+                            wms_stub --> wms_pxy : return IBinder
+                            deactivate wms_stub
+note over session_pxy
+mWindowSession包含于ViewRootImpl类中,
+由WindowManagerGlobal.sWindowSession
+赋值, sWindowSession是全局变量, 
+此对象也是应用进程范围内唯一的.
+sWindowSession是Binder客户端对象, 依据如下:
+在 IWindowSession$Stub$Proxy#openSession 中:
+_result = android.view.IWindowSession.Stub.
+asInterface(_reply.readStrongBinder());
+return _result;
+path: /out/target/common/obj/JAVA_LIBRARIES
+      /framework_intermediates/core/java
+      /android/view/IWindowManager.java
+end note
+                            create session_pxy
+                            wms_pxy -> session_pxy : new
+                            activate session_pxy
+                            session_pxy --> wms_pxy
+                            deactivate session_pxy
+
+                        wms_pxy --> wmg : return IWindowSession
+                        deactivate wms_pxy
+                    wmg --> vri : return IWindowSession
+                    deactivate wmg
+                vri --> wmg
+                deactivate vri
+
+                wmg -> vri : setView(\n  View view,\n  WindowManager.LayoutParams attrs,\n  View panelParentView\n)
+                activate vri
+                note left
+                view的实参为一个Activity
+                范围内唯一的DecorView对象
+                end note
+                    alt mView == null
+
+                        vri -> vri : requestLayout()
+                        activate vri
+                                    vri ->> vri : performTraversals()
+                                    activate vri
+                                    note left #LightBlue
+                                    Important!!!
+                                    异步调用
+                                    end note
+                                    vri --> vri
+                                    deactivate vri
+                        vri --> vri
+                        deactivate vri
+
+                        vri -> session_pxy : addToDisplay
+                        note left #Red
+                        Important!!!
+                        end note
+                        activate session_pxy
+                            session_pxy ->> session_stub : addToDisplay
+                            activate session_stub
+                                session_stub -> wms_stub : addWindow
+                                activate wms_stub
+
+                                wms_stub --> session_stub : return int
+                                deactivate wms_stub
+                            session_stub --> session_pxy : return int
+                            deactivate session_stub
+                        session_pxy --> vri : return int
+                        deactivate session_pxy
+
+                    end
+                vri --> wmg
+                deactivate vri
+
+            wmg --> wm
+            deactivate wmg
+        wm --> at
+        deactivate wm
+    end
+    end
+    end
+
+at --> Looper
+deactivate at
+
+
+
+@enduml

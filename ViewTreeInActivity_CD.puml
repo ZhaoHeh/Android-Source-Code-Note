@@ -1,0 +1,47 @@
+@startuml
+
+interface ViewManager {
+    public void addView(View view, ViewGroup.LayoutParams params);
+    public void updateViewLayout(View view, ViewGroup.LayoutParams params);
+    public void removeView(View view);
+}
+
+interface WindowManager {
+}
+
+class WindowManagerImpl {
+}
+
+class WindowManagerGlobal {
+}
+
+interface IBinder {
+    {method} transact()
+}
+
+class Binder {
+    {method} onTransact()
+}
+
+interface IWindowManager {
+}
+
+abstract class IWindowManager.Stub {  
+}
+
+class WindowManagerService {
+}
+
+
+
+ViewManager <|-- WindowManager 
+WindowManager <|.. WindowManagerImpl
+
+IBinder <|.. Binder
+Binder <|-- IWindowManager.Stub
+IWindowManager <|.. IWindowManager.Stub
+IWindowManager.Stub <|-- WindowManagerService
+
+mWindowMap是一个<IBinder, WindowState>类型的HashMap, 前面的IBinder代表IWindow
+
+@enduml

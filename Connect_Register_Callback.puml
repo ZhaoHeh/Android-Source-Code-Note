@@ -1,0 +1,128 @@
+@startuml
+
+/'连接流程'/
+
+actor client
+
+participant NativeVSyncManager as nativeMgr
+participant EventConnection as ecn
+participant VSyncManagerService as svc
+participant VSyncModulator as mdl
+participant VSyncThread as vthd
+participant Connection as cn
+
+
+        create nativeMgr
+        client -> nativeMgr : new
+        activate nativeMgr
+            nativeMgr -> nativeMgr : createConnection
+            activate nativeMgr
+                nativeMgr -[#SeaGreen]>> svc
+                activate svc
+                    svc -> mdl : createConnection
+                    activate mdl
+                        mdl -> vthd : createConnection
+                        activate vthd
+                            create cn
+                            vthd -> cn : new
+                            activate cn
+                            cn --> vthd : Connection
+                            deactivate cn
+                        vthd --> mdl
+                        deactivate vthd
+                    mdl --> svc
+                    deactivate mdl
+                svc -[#SeaGreen]->> nativeMgr : status
+                deactivate svc
+            nativeMgr --> nativeMgr : status
+            deactivate nativeMgr
+
+            create ecn
+            nativeMgr -> ecn : new
+            activate ecn
+            ecn -> nativeMgr : status
+            deactivate ecn
+        nativeMgr --> mgr : status
+        deactivate nativeMgr
+
+@enduml
+
+
+
+@startuml
+
+/'注册流程'/
+
+actor client
+
+participant NativeCallback as ncb
+participant NativeVSyncManager as nmgr
+participant "std::forward_list<NativeCallback *>" as ncbs
+
+create ncb
+client -> ncb : new
+activate ncb
+ncb --> client
+deactivate ncb
+
+client -> nmgr : postCallback(NativeCallback ncb)
+activate nmgr
+    nmgr -> ncbs : add
+    activate ncbs
+    ncbs --> nmgr
+    deactivate ncbs
+nmgr --> client : status
+deactivate nmgr
+
+@enduml
+
+
+
+@startuml
+
+/'回调流程'/
+
+actor client
+
+participant NativeVSyncManager as nativeMgr
+participant NativeCallback as ncb
+participant EventConnection as ecn
+participant VSyncManagerService as svc
+participant VSyncModulator as mdl
+participant VSyncThread as vthd
+participant Connection as cn
+
+vthd -> cn : onVSync
+activate cn
+    cn -> mdl : notifyVSync
+    activate mdl
+        mdl -> svc : onVSync
+        activate svc
+        svc --> mdl
+        deactivate svc
+    mdl --> cn
+    deactivate mdl
+
+    cn -[#SeaGreen]>> ecn : handleEvent
+    activate ecn
+        ecn -> nativeMgr : handleEvent
+        activate nativeMgr
+            nativeMgr -> nativeMgr : fireAllCallbacks
+            activate nativeMgr
+                loop
+                    nativeMgr -> ncb : onVSync
+                    activate ncb
+                    ncb --> nativeMgr
+                    deactivate ncb
+                end
+            nativeMgr --> nativeMgr
+            deactivate nativeMgr
+        nativeMgr --> ecn
+        deactivate nativeMgr
+    ecn -[#SeaGreen]->> cn
+    deactivate ecn
+cn --> vthd
+deactivate cn
+
+
+@enduml

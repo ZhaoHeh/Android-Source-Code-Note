@@ -1,0 +1,273 @@
+@startuml
+
+participant "ViewRootImpl" as vri
+participant "mChoreographer\nof ViewRootImpl\n:Choreographer" as chg
+participant "mDisplayEventReceiver\nof Choreographer\n:Choreographer$FrameDisplayEventReceiver\nextends DisplayEventReceiver" as fder
+participant "super of FrameDisplayEventReceiver\n:DisplayEventReceiver" as der_java
+participant "mReceiverPtr\nof DisplayEventReceiver\n:NativeDisplayEventReceiver[C++]\n: public DisplayEventDispatcher[C++]" as nder
+participant "DisplayEventDispatcher[C++]\n: public LooperCallback[C++]" as dptch
+participant "mReceiver\nof DisplayEventDispatcher[C++]\n:DisplayEventReceiver[C++]" as der
+participant "mEventConnection\nof DisplayEventReceiver[C++]\n:IDisplayEventConnection[C++]\n(EventThreadConnection的binder客户端)" as dec
+
+participant "android::gui::BitTube" as tube
+
+participant "EventThreadConnection[C++]\n:BnDisplayEventConnection[C++]\n:SafeBnInterface<IDisplayEventConnection>" as dec_bn
+participant "mEventThread\nof EventThreadConnection\n:EventThread" as ethd
+participant "mThread\nof EventThread\nstd::thread" as threadMain
+participant "mPrimaryVsyncState\nof Scheduler\n:std::shared_ptr<VsyncState>" as vsync
+participant "mPrimaryDispSync\nof Scheduler\n:std::unique_ptr<DispSync>" as dispSync
+participant "mScheduler\nof SurfaceFlinger" as scheduler
+participant "SurfaceFlinger" as flinger
+
+
+
+[-> vri : requestLayout()
+activate vri
+    alt !mHandlingLayoutInLayoutRequest
+
+        vri -> vri : checkThread()
+        activate vri
+        note right
+        任何一个Activity的view tree
+        以及ViewRootImpl实例都是在
+        ActivityThread的sMainLooper线程
+        也就是UI主线程,
+        也就是ActivityThread.main进程的主线程
+        中构建的, 这里检查当前线程是否为主线程,
+        否则抛出异常
+        end note
+        vri --> vri
+        deactivate vri
+
+        vri -> vri : scheduleTraversals()
+        activate vri
+            alt !mTraversalScheduled
+                vri -> chg : postCallback(\n  Choreographer.CALLBACK_TRAVERSAL,\n  mTraversalRunnable,\n  null\n)
+                activate chg
+                    chg -> chg : postCallbackDelayed(\n  Choreographer.CALLBACK_TRAVERSAL,\n  mTraversalRunnable,\n  null,\n  0\n)
+                    activate chg
+                        chg -> chg : postCallbackDelayedInternal(\n  Choreographer.CALLBACK_TRAVERSAL,\n  mTraversalRunnable,\n  null,\n  0\n)
+                        activate chg
+                        alt dueTime <= now
+                            chg -> chg : scheduleFrameLocked(now)
+                            activate chg
+                            alt !mFrameScheduled
+                            alt USE_VSYNC
+                            alt isRunningOnLooperThreadLocked()
+                                chg -> chg : scheduleVsyncLocked()
+                                activate chg
+                                note right
+                                如果Looper.myLooper() != mLooper,
+                                则当前线程不是主线程, 那么会通过
+                                mHandler发消息给主线程, 最终也是要执行
+                                scheduleVsyncLocked()
+                                end note
+                                    chg -> fder : scheduleVsync()
+                                    activate fder
+                                        fder -> fder : nativeScheduleVsync(\n  mReceiverPtr\n)
+                                        activate fder
+                                            fder -> nder : scheduleVsync()
+                                            activate nder
+                                                nder -> der : requestNextVsync()
+                                                activate der
+                                                    der -> dec : requestNextVsync()
+                                                    activate dec
+/'
+mEventConnection 是 DisplayEventReceiver 的 private 成员
+[frameworks/native/libs/gui/include/gui/DisplayEventReceiver.h;l=148]
+
+mEventConnection 通过 ISurfaceComposer::createDisplayEventConnection 函数赋值
+[frameworks/native/libs/gui/DisplayEventReceiver.cpp;l=35]
+
+/*static*/ sp<ISurfaceComposer> ComposerService::getComposerService() {
+    ComposerService& instance = ComposerService::getInstance();
+    Mutex::Autolock _l(instance.mLock);
+    if (instance.mComposerService == nullptr) {
+        ComposerService::getInstance().connectLocked();
+        assert(instance.mComposerService != nullptr);
+        ALOGD("ComposerService reconnected");
+    }
+    return instance.mComposerService;
+}
+[frameworks/native/libs/gui/SurfaceComposerClient.cpp;l=90]
+
+mComposerService
+[声明在 frameworks/native/libs/gui/include/private/gui/ComposerService.h;l=41]
+[赋值在 frameworks/native/libs/gui/SurfaceComposerClient.cpp;l=69]
+
+sf@frameworks/native/libs/gui/DisplayEventReceiver.cpp;l=35
+的实际类型应该是 BpSurfaceComposer : public BpInterface<ISurfaceComposer>
+[frameworks/native/libs/gui/ISurfaceComposer.cpp;l=52]
+
+sf->createDisplayEventConnection(vsyncSource, configChanged)实际上调用的是
+BpSurfaceComposer::createDisplayEventConnection
+[frameworks/native/libs/gui/ISurfaceComposer.cpp;l=281]
+
+服务端是surfaceflinger进程的SurfaceFlinger对象
+SurfaceFlinger 继承自 BnSurfaceComposer
+[frameworks/native/services/surfaceflinger/SurfaceFlinger.h;l=171]
+
+服务端的执行是 SurfaceFlinger::createDisplayEventConnection
+[frameworks/native/services/surfaceflinger/SurfaceFlinger.cpp;l=1410]
+->  [frameworks/native/services/surfaceflinger/Scheduler/Scheduler.cpp;l=172]
+    ->  [frameworks/native/services/surfaceflinger/Scheduler/Scheduler.cpp;l=166]
+        ->  frameworks/native/services/surfaceflinger/Scheduler/EventThread.cpp;l=212
+            ->  frameworks/native/services/surfaceflinger/Scheduler/EventThread.cpp;l=113
+                ->  [frameworks/native/services/surfaceflinger/Scheduler/EventThread.h;l=70]
+
+
+'/
+                                                    
+                                                        dec -[#SeaGreen]>> dec_bn : requestNextVsync()
+                                                        activate dec_bn
+                                                            dec_bn -> ethd : requestNextVsync(this)
+                                                            activate ethd
+                                                                ethd -> dec_bn : resyncCallback
+                                                                note right
+                                                                resyncCallback是ResyncCallback类型
+                                                                ResyncCallback实际上是 std::function<void()>
+                                                                可以理解为函数指针
+                                                                end note
+                                                                activate dec_bn
+                                                                    /'
+                                                                    [ptr, getVsyncPeriod = std::move(getVsyncPeriod)]() {
+                                                                            if (const auto vsync = ptr.lock()) {
+                                                                                vsync->resync(getVsyncPeriod);
+                                                                            }
+                                                                        }
+                                                                    '/
+                                                                    dec_bn -> vsync : resync(getVsyncPeriod)
+                                                                    activate vsync
+                                                                    alt now - last > kIgnoreDelay ??????
+                                                                        vsync -> flinger : getVsyncPeriod()
+                                                                        activate flinger
+                                                                        flinger --> vsync : nsecs_t period
+                                                                        deactivate flinger
+
+                                                                        vsync -> scheduler : resyncToHardwareVsync(false, period)
+                                                                        activate scheduler
+                                                                            alt mHWVsyncAvailable && period > 0
+                                                                                scheduler -> scheduler : setVsyncPeriod(period)
+                                                                                activate scheduler
+                                                                                    scheduler -> dispSync : setPeriod(period)
+                                                                                    activate dispSync
+
+                                                                                    dispSync --> scheduler
+                                                                                    deactivate dispSync
+                                                                                scheduler --> scheduler
+                                                                                deactivate scheduler
+                                                                            end
+                                                                        scheduler --> vsync
+                                                                        deactivate scheduler
+                                                                    end
+                                                                    vsync --> dec_bn
+                                                                    deactivate vsync
+                                                                dec_bn --> ethd
+                                                                deactivate dec_bn
+
+                                                                alt connection->vsyncRequest == VSyncRequest::None
+                                                                    ethd -> dec_bn : vsyncRequest = VSyncRequest::Single
+                                                                    activate dec_bn
+                                                                    dec_bn --> ethd
+                                                                    deactivate dec_bn
+
+                                                                    ethd -> ethd : mCondition.notify_all()
+                                                                    activate ethd
+                                                                        ethd -[#SeaGreen]>> threadMain : 线程将被唤醒
+                                                                    ethd --> ethd
+                                                                    deactivate ethd
+                                                                end
+                                                            ethd --> dec_bn
+                                                            deactivate ethd
+                                                        dec_bn -[#SeaGreen]->> dec
+                                                        deactivate dec_bn
+                                                    dec --> der
+                                                    deactivate dec
+                                                der --> nder
+                                                deactivate der
+                                            nder --> fder
+                                            deactivate nder
+                                        fder --> fder
+                                        deactivate fder
+                                    fder --> chg
+                                    deactivate fder
+                                chg --> chg
+                                deactivate chg
+                            end
+                            /'alt isRunningOnLooperThreadLocked()'/
+                            end
+                            /'alt USE_VSYNC'/
+                            end
+                            /'alt !mFrameScheduled'/
+                            chg --> chg
+                            deactivate chg
+                        end
+                        /'alt dueTime <= now'/
+                        chg --> chg
+                        deactivate chg
+                    chg --> chg
+                    deactivate chg
+                chg --> vri
+                deactivate chg
+            end
+        vri --> vri
+        deactivate vri
+
+    end
+[<--vri
+deactivate vri
+
+activate threadMain
+    threadMain -> ethd : threadMain
+    activate ethd
+        ethd -> ethd : dispatchEvent
+        activate ethd
+            ethd -> dec_bn : postEvent
+            activate dec_bn
+                dec_bn -> tube : sendObjects
+                note right
+                EventThreadConnection::postEvent
+                所在的代码位置是:
+                EventThread.cpp;l=147
+                这一步的调用实际上还经过了
+                DisplayEventReceiver的静态方法
+                static ssize_t sendEvents
+                [frameworks/native/libs/gui/
+                DisplayEventReceiver.cpp;l=94]
+                end note
+                activate tube
+                    tube -[#SeaGreen]>> dptch : handleEvent
+                    activate dptch
+                        dptch -> nder : dispatchVsync
+                        note right
+                        android_view_DisplayEventReceiver.cpp;
+                        l=93
+                        end note
+                        activate nder
+                            nder -> der_java : dispatchVsync
+                            note right
+                            DisplayEventReceiver.java;l=202
+                            end note
+                            activate der_java
+                                der_java -> fder : onVsync
+                                note right
+                                Choreographer.java;l=924
+                                end note
+                                activate fder
+                                fder --> der_java
+                                deactivate fder
+                            der_java --> nder
+                            deactivate der_java
+                        nder --> dptch
+                        deactivate nder
+                    dptch -[#SeaGreen]->> tube : int
+                    deactivate dptch
+                tube --> dec_bn : ssize_t
+                deactivate tube
+            dec_bn --> ethd : status_t
+            deactivate dec_bn
+        ethd --> ethd
+        deactivate ethd
+    ethd --> threadMain
+    deactivate ethd
+@enduml
