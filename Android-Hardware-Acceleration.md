@@ -1,8 +1,12 @@
-# RenderThread Initialization
-Android应用程序UI硬件加速渲染环境的初始化过程，主要的关注点就是：  
-（1）创建Render Thread的过程  
-（2）绑定窗口到Render Thread的过程  
-## 1. Android应用程序UI硬件加速渲染环境的初始化过程的第一个任务——创建Render Thread
+# Android的硬件加速渲染机制探究
+
+Android应用程序UI硬件加速渲染环境的核心可以说是Render Thread，下面的内容就围绕Render Thread展开论述，主要的关注点就是：  
+（1）初始化：创建Render Thread的过程  
+（2）初始化2：通过Render Thread创建EGL Surface的过程  
+（3）业务执行：通过Render Thread渲染一帧画面的过程  
+
+## 1. 创建Render Thread
+
 ```
     /**
      * We have one child
@@ -61,7 +65,7 @@ Android应用程序UI硬件加速渲染环境的初始化过程，主要的关�
 （4）RenderThread依赖vsync信号  
 （5）RenderThread具体的事件驱动机制目前并不清楚，老罗介绍的代码是比较旧的了  
 
-## 2. Android应用程序UI硬件加速渲染环境初始化的另一个主要任务——绑定窗口到Render Thread
+## 2. 绑定窗口到Render Thread
 
 把老罗的原话整理一下，非常有用：  
 1. Activity窗口的绘制流程是在ViewRootImpl#performTraversals发起的  
@@ -113,13 +117,15 @@ Android应用程序UI硬件加速渲染环境的初始化过程，主要的关�
 &emsp;&emsp;&emsp;[HardwareRenderer#setSurface][setSurface1]  
 &emsp;&emsp;&emsp;&emsp;[HardwareRenderer#nSetSurface][nSetSurface]  
 &emsp;&emsp;&emsp;&emsp;&emsp;[RenderProxy::setSurface][setSurface3]  
+下面开始进入RenderThread执行：  
 &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[CanvasContext::setSurface][setSurface4]（最新的CanvasContext不再有initialize成员函数）  
 &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[SkiaOpenGLPipeline::setSurface][setSurface5]  
 &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[RenderThread::requireGlContext][requireGlContextLink]  
 &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[EglManager::initialize][EglInitLink]  
 &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[EglManager::createSurface][EglCreateSurfLink]    
 
-## 3. 初始化外的任务——makeCurrent
+## 3. 渲染一帧画面
+
 ```
     private boolean draw(boolean fullRedrawNeeded) {
         Surface surface = mSurface;
@@ -148,23 +154,23 @@ Android应用程序UI硬件加速渲染环境的初始化过程，主要的关�
 ```
 上述代码之前的调用：  
 [ViewRootImpl#performTraversals][performTraversalsLink3]  
-[ViewRootImpl#performDraw][performDrawLink3]  
-[ViewRootImpl#draw][drawLink3]  
+&emsp;[ViewRootImpl#performDraw][performDrawLink3]  
+&emsp;&emsp;[ViewRootImpl#draw][drawLink3]  
 
 从上述代码开始继续调用：  
 [ThreadedRenderer#draw][threadedRenderDrawLink3]  
-[HardwareRenderer#syncAndDrawFrame][syncAndDrawFrame3]  
-[HardwareRenderer#nSyncAndDrawFrame][nSyncAndDrawFrame3]  
-[RenderProxy::syncAndDrawFrame][RenderProxySyncAndDrawFrame3]  
-[DrawFrameTask::drawFrame][TaskDrawFrame3]  
-[DrawFrameTask::postAndWait][TaskPostAndWait3]  
+&emsp;[HardwareRenderer#syncAndDrawFrame][syncAndDrawFrame3]  
+&emsp;&emsp;[HardwareRenderer#nSyncAndDrawFrame][nSyncAndDrawFrame3]  
+&emsp;&emsp;&emsp;[RenderProxy::syncAndDrawFrame][RenderProxySyncAndDrawFrame3]  
+&emsp;&emsp;&emsp;&emsp;[DrawFrameTask::drawFrame][TaskDrawFrame3]  
+&emsp;&emsp;&emsp;&emsp;&emsp;[DrawFrameTask::postAndWait][TaskPostAndWait3]  
 
 下面开始进入RenderThread执行：  
 [DrawFrameTask::run][DrawFrameTaskRun3]  
-[DrawFrameTask::syncFrameState][syncFrameState3]  
-[CanvasContext::makeCurrent][ContextMakeCurrent3]  
-[SkiaOpenGLPipeline::makeCurrent][PipeMakeCurrent3]  
-[EglManager::makeCurrent][EglMakeCurrent3]  
+&emsp;[DrawFrameTask::syncFrameState][syncFrameState3]  
+&emsp;&emsp;[CanvasContext::makeCurrent][ContextMakeCurrent3]  
+&emsp;&emsp;&emsp;[SkiaOpenGLPipeline::makeCurrent][PipeMakeCurrent3]  
+&emsp;&emsp;&emsp;&emsp;[EglManager::makeCurrent][EglMakeCurrent3]  
 
 
 

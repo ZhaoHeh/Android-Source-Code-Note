@@ -31,6 +31,8 @@ This README would normally document whatever steps are necessary to get your app
 ### How to use VSCode plugins ###
 
 * Markdown All in One :
-  * Ctrl + Shift + V : Open Preview
+  * Ctrl + Shift + V : Open Preview（Windows）
+  * Cmd + Shift + V : Open Preview（macOS）
 * PlantUML :
-  * Alt + D : Open Preview
+  * Alt + D : Open Preview（Windows）
+  * Opt + D : Open Preview（macOS）
