@@ -1,12 +1,8 @@
 # RenderThread Initialization
-
-Android应用程序UI硬件加速渲染环境的初始化过程，主要的关注点就是
-
+Android应用程序UI硬件加速渲染环境的初始化过程，主要的关注点就是：  
 （1）创建Render Thread的过程  
 （2）绑定窗口到Render Thread的过程  
-
 ## 1. Android应用程序UI硬件加速渲染环境的初始化过程的第一个任务——创建Render Thread
-
 ```
     /**
      * We have one child
@@ -34,19 +30,18 @@ Android应用程序UI硬件加速渲染环境的初始化过程，主要的关�
             }
         }
     }
-
 ```
+主要的调用栈：  
 [ViewRootImpl#setView][setView]  
-[ViewRootImpl#enableHardwareAcceleration][enableHardwareAcceleration]  
-[ThreadedRenderer#create][ThreadedRendererCreadte]  
-[HardwareRenderer#HardwareRenderer][HardwareRenderer]  
-
+&emsp;[ViewRootImpl#enableHardwareAcceleration][enableHardwareAcceleration]  
+&emsp;&emsp;[ThreadedRenderer#create][ThreadedRendererCreadte]  
+&emsp;&emsp;&emsp;[HardwareRenderer#HardwareRenderer][HardwareRenderer]  
 下面需要重点关注  
-（1）窗口的Render Node即Root Render Note的创建过程(nCreateRootRenderNode函数)  
-（2）Main Thread向Render Thread发送命令的代理Render Proxy的创建过程(nCreateProxy函数)  
+（1）窗口的Render Node即Root Render Node的创建过程(nCreateRootRenderNode函数)  
+* [HardwareRenderer#nCreateRootRenderNode][android_view_ThreadedRenderer_createRootRenderNode]  
 
-[HardwareRenderer#nCreateRootRenderNode][android_view_ThreadedRenderer_createRootRenderNode]  
-[HardwareRenderer#nCreateProxy][android_view_ThreadedRenderer_createProxy]  
+（2）Main Thread向Render Thread发送命令的代理Render Proxy的创建过程(nCreateProxy函数)  
+* [HardwareRenderer#nCreateProxy][android_view_ThreadedRenderer_createProxy]  
 
 这两个函数会牵扯出几个重要的native类:  
 [RenderNode][RenderNodeLink](Path: frameworks/base/libs/hwui/RenderNode.cpp)  
@@ -56,12 +51,15 @@ Android应用程序UI硬件加速渲染环境的初始化过程，主要的关�
 关于[RenderProxy][RenderProxyLink]需要了解如下几个要点：  
 （1）RenderThread的初始化在RenderProxy的构造函数中完成  
 （2）RenderProxy向RenderThread发送的第一个命令就是让其创建[CanvasContext][CanvasContextLink]对象  
-（3）RenderProxy主要包含三个重要的成员变量：mRenderThread mContext mDrawFrameTask
+（3）RenderProxy主要包含三个重要的成员变量：mRenderThread mContext mDrawFrameTask  
+（4）[CanvasContext的创建][CanvasContextCreateLink]在RenderThread线程中完成，CanvasContext中最重要的成员就是mRenderPipeline  
 
 关于[RenderThread][RenderThreadLink]需要重点关注如下几点：  
 （1）RenderThread依赖Android的native Looper机制实现  
-（2）RenderThread依赖vsync信号  
-（3）RenderThread具体的事件驱动机制目前并不清楚，老罗介绍的代码是比较旧的了  
+（2）RenderThread在[RenderThread::threadLoop()][threadLoopLink]中调用[RenderThread::initThreadLocals()][initThreadLocalsLink]  
+（3）RenderThread中两个成员变量mEglManager和mVkManager涉及GPU渲染的API（OpenGL和Vulkan）  
+（4）RenderThread依赖vsync信号  
+（5）RenderThread具体的事件驱动机制目前并不清楚，老罗介绍的代码是比较旧的了  
 
 ## 2. Android应用程序UI硬件加速渲染环境初始化的另一个主要任务——绑定窗口到Render Thread
 
@@ -108,19 +106,65 @@ Android应用程序UI硬件加速渲染环境的初始化过程，主要的关�
         mIsInTraversal = false;
     }
 ```
+函数调用栈：  
 [ViewRootImpl#performTraversals][performTraversals]  
-[ThreadedRenderer#initialize][initialize]  
-[ThreadedRenderer#setSurface][setSurface]  
-[HardwareRenderer#setSurface][setSurface1]  
-[HardwareRenderer#nSetSurface][nSetSurface]  
-[RenderProxy::setSurface][setSurface3]  
-[CanvasContext::setSurface][setSurface4]  
+&emsp;[ThreadedRenderer#initialize][initialize]  
+&emsp;&emsp;[ThreadedRenderer#setSurface][setSurface]  
+&emsp;&emsp;&emsp;[HardwareRenderer#setSurface][setSurface1]  
+&emsp;&emsp;&emsp;&emsp;[HardwareRenderer#nSetSurface][nSetSurface]  
+&emsp;&emsp;&emsp;&emsp;&emsp;[RenderProxy::setSurface][setSurface3]  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[CanvasContext::setSurface][setSurface4]（最新的CanvasContext不再有initialize成员函数）  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[SkiaOpenGLPipeline::setSurface][setSurface5]  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[RenderThread::requireGlContext][requireGlContextLink]  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[EglManager::initialize][EglInitLink]  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[EglManager::createSurface][EglCreateSurfLink]    
 
+## 3. 初始化外的任务——makeCurrent
+```
+    private boolean draw(boolean fullRedrawNeeded) {
+        Surface surface = mSurface;
+        // ... 省略代码
+        mAttachInfo.mTreeObserver.dispatchOnDraw();
+        // ... 省略代码
+        mAttachInfo.mDrawingTime =
+                mChoreographer.getFrameTimeNanos() / TimeUtils.NANOS_PER_MS;
 
+        boolean useAsyncReport = false;
+        if (!dirty.isEmpty() || mIsAnimating || accessibilityFocusDirty) {
+            if (mAttachInfo.mThreadedRenderer != null && mAttachInfo.mThreadedRenderer.isEnabled()) {
+                // ... 省略代码
+                mAttachInfo.mThreadedRenderer.draw(mView, mAttachInfo, this);
+            } else {
+                // ... 省略代码
+                if (!drawSoftware(surface, mAttachInfo, xOffset, yOffset,
+                        scalingRequired, dirty, surfaceInsets)) {
+                    return false;
+                }
+            }
+        }
+        // ... 省略代码
+        return useAsyncReport;
+    }
+```
+上述代码之前的调用：  
+[ViewRootImpl#performTraversals][performTraversalsLink3]  
+[ViewRootImpl#performDraw][performDrawLink3]  
+[ViewRootImpl#draw][drawLink3]  
 
+从上述代码开始继续调用：  
+[ThreadedRenderer#draw][threadedRenderDrawLink3]  
+[HardwareRenderer#syncAndDrawFrame][syncAndDrawFrame3]  
+[HardwareRenderer#nSyncAndDrawFrame][nSyncAndDrawFrame3]  
+[RenderProxy::syncAndDrawFrame][RenderProxySyncAndDrawFrame3]  
+[DrawFrameTask::drawFrame][TaskDrawFrame3]  
+[DrawFrameTask::postAndWait][TaskPostAndWait3]  
 
-
-
+下面开始进入RenderThread执行：  
+[DrawFrameTask::run][DrawFrameTaskRun3]  
+[DrawFrameTask::syncFrameState][syncFrameState3]  
+[CanvasContext::makeCurrent][ContextMakeCurrent3]  
+[SkiaOpenGLPipeline::makeCurrent][PipeMakeCurrent3]  
+[EglManager::makeCurrent][EglMakeCurrent3]  
 
 
 
@@ -145,8 +189,11 @@ Android应用程序UI硬件加速渲染环境的初始化过程，主要的关�
 [RenderNodeLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/RenderNode.cpp
 [RenderProxyLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/RenderProxy.cpp;l=36
 [RenderThreadLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/RenderThread.cpp;l=127
+[threadLoopLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/RenderThread.cpp;l=323
+[initThreadLocalsLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/RenderThread.cpp;l=164
 
 [CanvasContextLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/CanvasContext.cpp;l=59
+[CanvasContextCreateLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/CanvasContext.cpp;l=59
 
 [performTraversals]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ViewRootImpl.java;l=2718
 [initialize]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ThreadedRenderer.java;l=361
@@ -155,3 +202,23 @@ Android应用程序UI硬件加速渲染环境的初始化过程，主要的关�
 [nSetSurface]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/jni/android_graphics_HardwareRenderer.cpp;l=174
 [setSurface3]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/RenderProxy.cpp;l=79
 [setSurface4]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/CanvasContext.cpp;l=157
+[setSurface5]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/pipeline/skia/SkiaOpenGLPipeline.cpp;l=160
+[requireGlContextLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/RenderThread.cpp;l=179
+[EglInitLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/EglManager.cpp;l=101
+[EglCreateSurfLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/EglManager.cpp;l=309
+
+
+[performTraversalsLink3]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ViewRootImpl.java;l=3104
+[performDrawLink3]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ViewRootImpl.java;l=3833
+[drawLink3]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ViewRootImpl.java;l=4106
+[threadedRenderDrawLink3]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ThreadedRenderer.java;l=638
+[syncAndDrawFrame3]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/graphics/java/android/graphics/HardwareRenderer.java;l=432
+[nSyncAndDrawFrame3]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/jni/android_graphics_HardwareRenderer.cpp;l=227
+[RenderProxySyncAndDrawFrame3]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/RenderProxy.cpp;l=120
+[TaskDrawFrame3]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/DrawFrameTask.cpp;l=68
+[TaskPostAndWait3]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/DrawFrameTask.cpp;l=78
+[DrawFrameTaskRun3]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/DrawFrameTask.cpp;l=84
+[syncFrameState3]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/DrawFrameTask.cpp;l=128
+[ContextMakeCurrent3]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/CanvasContext.cpp;l=250
+[PipeMakeCurrent3]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/pipeline/skia/SkiaOpenGLPipeline.cpp;l=56
+[EglMakeCurrent3]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/EglManager.cpp;l=401

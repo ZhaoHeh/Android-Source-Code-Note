@@ -27,3 +27,10 @@ This README would normally document whatever steps are necessary to get your app
 
 * Repo owner or admin
 * Other community or team contact
+
+### How to use VSCode plugins ###
+
+* Markdown All in One :
+  * Ctrl + Shift + V : Open Preview
+* PlantUML :
+  * Alt + D : Open Preview
