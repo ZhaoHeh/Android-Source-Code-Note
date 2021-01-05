@@ -7,7 +7,7 @@ Android应用程序UI硬件加速渲染环境的核心可以说是Render Thread�
 
 ## 1. 创建Render Thread
 
-```
+```java
     /**
      * We have one child
      */
@@ -35,16 +35,20 @@ Android应用程序UI硬件加速渲染环境的核心可以说是Render Thread�
         }
     }
 ```
+
 主要的调用栈：  
 [ViewRootImpl#setView][setView]  
 &emsp;[ViewRootImpl#enableHardwareAcceleration][enableHardwareAcceleration]  
 &emsp;&emsp;[ThreadedRenderer#create][ThreadedRendererCreadte]  
 &emsp;&emsp;&emsp;[HardwareRenderer#HardwareRenderer][HardwareRenderer]  
+
 下面需要重点关注  
 （1）窗口的Render Node即Root Render Node的创建过程(nCreateRootRenderNode函数)  
+
 * [HardwareRenderer#nCreateRootRenderNode][android_view_ThreadedRenderer_createRootRenderNode]  
 
 （2）Main Thread向Render Thread发送命令的代理Render Proxy的创建过程(nCreateProxy函数)  
+
 * [HardwareRenderer#nCreateProxy][android_view_ThreadedRenderer_createProxy]  
 
 这两个函数会牵扯出几个重要的native类:  
@@ -68,10 +72,12 @@ Android应用程序UI硬件加速渲染环境的核心可以说是Render Thread�
 ## 2. 绑定窗口到Render Thread
 
 把老罗的原话整理一下，非常有用：  
+
 1. Activity窗口的绘制流程是在ViewRootImpl#performTraversals发起的  
 2. 在绘制之前，首先要通过ViewRootImpl#relayoutWindow向WindowManagerService申请一个surface  
 3. 一旦获得了对应的Surface，就需要将它绑定到Render Thread中  
-```
+
+```java
     private void performTraversals() {
         // ... 省略代码
         if (mFirst || windowShouldResize || viewVisibilityChanged || cutoutChanged || params != null
@@ -110,6 +116,7 @@ Android应用程序UI硬件加速渲染环境的核心可以说是Render Thread�
         mIsInTraversal = false;
     }
 ```
+
 函数调用栈：  
 [ViewRootImpl#performTraversals][performTraversals]  
 &emsp;[ThreadedRenderer#initialize][initialize]  
@@ -122,11 +129,11 @@ Android应用程序UI硬件加速渲染环境的核心可以说是Render Thread�
 &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[SkiaOpenGLPipeline::setSurface][setSurface5]  
 &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[RenderThread::requireGlContext][requireGlContextLink]  
 &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[EglManager::initialize][EglInitLink]  
-&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[EglManager::createSurface][EglCreateSurfLink]    
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[EglManager::createSurface][EglCreateSurfLink]
 
 ## 3. 渲染一帧画面
 
-```
+```java
     private boolean draw(boolean fullRedrawNeeded) {
         Surface surface = mSurface;
         // ... 省略代码
@@ -152,6 +159,7 @@ Android应用程序UI硬件加速渲染环境的核心可以说是Render Thread�
         return useAsyncReport;
     }
 ```
+
 上述代码之前的调用：  
 [ViewRootImpl#performTraversals][performTraversalsLink3]  
 &emsp;[ViewRootImpl#performDraw][performDrawLink3]  
@@ -172,20 +180,11 @@ Android应用程序UI硬件加速渲染环境的核心可以说是Render Thread�
 &emsp;&emsp;&emsp;[SkiaOpenGLPipeline::makeCurrent][PipeMakeCurrent3]  
 &emsp;&emsp;&emsp;&emsp;[EglManager::makeCurrent][EglMakeCurrent3]  
 
-
-
-
-
-
 参考链接：  
 [Android应用程序UI硬件加速渲染环境初始化过程分析](https://blog.csdn.net/luoshengyang/article/details/45769759)
 
-
-
-
 [setView]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ViewRootImpl.java;l=977
 [enableHardwareAcceleration]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ViewRootImpl.java;l=1298
-
 
 [ThreadedRendererCreadte]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ThreadedRenderer.java;l=252
 [HardwareRenderer]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/graphics/java/android/graphics/HardwareRenderer.java;l=157
@@ -212,7 +211,6 @@ Android应用程序UI硬件加速渲染环境的核心可以说是Render Thread�
 [requireGlContextLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/RenderThread.cpp;l=179
 [EglInitLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/EglManager.cpp;l=101
 [EglCreateSurfLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/EglManager.cpp;l=309
-
 
 [performTraversalsLink3]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ViewRootImpl.java;l=3104
 [performDrawLink3]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ViewRootImpl.java;l=3833
