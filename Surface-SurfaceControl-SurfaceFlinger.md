@@ -105,14 +105,58 @@ Surface::Surface(const sp<IGraphicBufferProducer>& bufferProducer, bool controll
 
 ### 5. TextureView中的Surface
 
-https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/TextureLayer.java;drc=master;l=35
-https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/TextureView.java;l=751
-https://cs.android.com/android/platform/superproject/+/master:frameworks/base/graphics/java/android/graphics/SurfaceTexture.java;l=166;drc=master
-https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/jni/android_graphics_SurfaceTexture.cpp;l=253
-https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/Surface.java;l=252?q=Surface.java
-https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/jni/android_view_Surface.cpp;l=155;drc=master;bpv=0;bpt=1
-https://cs.android.com/android/platform/superproject/+/master:frameworks/native/libs/gui/Surface.cpp;l=66;drc=master
-https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/Surface.java;drc=master;l=680?q=Surface.java
+```java
+    @Override
+    public final void draw(Canvas canvas) {
+        // NOTE: Maintain this carefully (see View#draw)
+        mPrivateFlags = (mPrivateFlags & ~PFLAG_DIRTY_MASK) | PFLAG_DRAWN;
+
+        /* Simplify drawing to guarantee the layer is the only thing drawn - so e.g. no background,
+        scrolling, or fading edges. This guarantees all drawing is in the layer, so drawing
+        properties (alpha, layer paint) affect all of the content of a TextureView. */
+
+        if (canvas.isHardwareAccelerated()) {
+            RecordingCanvas recordingCanvas = (RecordingCanvas) canvas;
+
+            TextureLayer layer = getTextureLayer();
+            if (layer != null) {
+                applyUpdate();
+                applyTransformMatrix();
+
+                mLayer.setLayerPaint(mLayerPaint); // ensure layer paint is up to date
+                recordingCanvas.drawTextureLayer(layer);
+            }
+        }
+    }
+```
+
+TextureView#draw的触发时机这里就不展开了，接下来的调用栈如下：  
+[TextureView#draw][tvDrawLink]  
+&emsp;[TextureView#getTextureLayer][getlayerLink]  
+首先，要通过硬件加速环境拿到一个TextureLayer对象：  
+&emsp;&emsp;[HardwareRenderer#createTextureLayer][createLayerLink]  
+&emsp;&emsp;&emsp;[HardwareRenderer#nCreateTextureLayer][nCreateLayerLink]  
+&emsp;&emsp;&emsp;&emsp;[RenderProxy::createTextureLayer][proxyCreateLayerLink]（我们知道，proxy的任务会交给RenderThread在渲染线程中做）  
+&emsp;&emsp;&emsp;&emsp;&emsp;[CanvasContext::createTextureLayer][ctxCreateLayerLink]  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[SkiaOpenGLPipeline::createTextureLayer][pipeCreateLayerLink]  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[DeferredLayerUpdater::DeferredLayerUpdater][deferredLayerUpdateLink]  
+以上，TextureView通过ThreadedRender创建了一个DeferredLayerUpdater对象，并且把这个对象的地址作为以jlong的形式传递到TextureLayer中。  
+&emsp;&emsp;&emsp;[TextureLayer#adoptTextureLayer][adoptTextLayerLink]  
+&emsp;&emsp;&emsp;&emsp;[TextureLayer#TextureLayer][tLayerLink]  
+TextureLayer主要保存的信息只有两个：HardwareRenderer对象TextureLayer#mRenderer和DeferredLayerUpdater对象的地址TextureLayer#mFinalizer。  
+下面来看SurfaceTexture的创建：  
+&emsp;&emsp;[SurfaceTexture#SurfaceTexture][SfTConstructorLink]  
+&emsp;&emsp;&emsp;[SurfaceTexture#nativeInit][nativeInitLink]  
+&emsp;&emsp;&emsp;&emsp;[SurfaceTexture::SurfaceTexture][nativeSFTLink]  
+&emsp;&emsp;&emsp;&emsp;[SurfaceTexture_setSurfaceTexture][SurfaceTexture_setSurfaceTextureLink]给SurfaceTexture(java)#mSurfaceTexture赋值  
+&emsp;&emsp;&emsp;&emsp;[SurfaceTexture_setProducer][SurfaceTexture_setProducerLink]给SurfaceTexture(java)#mProducer赋值  
+在SurfaceTexture#nativeInit中会创建一个BufferQueue，BufferQueue中的Consumer会传递给SurfaceTexture(c++)。也就是说，SurfaceTexture或持有SurfaceTexture对象的对象就是这次创建出的BufferQueue的消费者。  
+&emsp;&emsp;[TextureView#nCreateNativeWindow][nCreateNativeWindowLink]  
+（frameworks/native/libs/nativedisplay/surfacetexture/surface_texture.cpp）  
+&emsp;&emsp;&emsp;[Surface::Surface][nativeSurfaceConstructorLink]（将[SurfaceTexture#nativeInit][nativeInitLink]过程中创建的producer传递给Surface(c++)）  
+总结：SurfaceTexture保存有完整的buffer queue，其中SurfaceTexture(java)持有producer，SurfaceTexture(c++)持有consumer。同时Android系统还利用producer创建了Surface(c++)对象，并由TextureView#mNativeWindow记录保存。  
+[TextureLayer#setSurfaceTexture][setSurfaceTextureLink1]  
+[TextureLayer#nSetSurfaceTexture][]
 
 [buildLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/SurfaceControl.java;l=645
 [ctrlLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/SurfaceControl.java;l=961
@@ -134,3 +178,22 @@ https://cs.android.com/android/platform/superproject/+/master:frameworks/base/co
 [nSfHeadLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/libs/gui/include/gui/Surface.h;l=68
 [hook_setSwapIntervalLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/libs/gui/Surface.cpp;l=374
 [SFsetSwapIntervalLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/libs/gui/Surface.cpp;l=521
+
+[tvDrawLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/TextureView.java;l=341
+[getlayerLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/TextureView.java;l=385
+[createLayerLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/graphics/java/android/graphics/HardwareRenderer.java;l=669
+[nCreateLayerLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/jni/android_graphics_HardwareRenderer.cpp;l=265
+[proxyCreateLayerLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/RenderProxy.cpp;l=151
+[ctxCreateLayerLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/CanvasContext.cpp;l=698
+[pipeCreateLayerLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/pipeline/skia/SkiaOpenGLPipeline.cpp;l=142
+[deferredLayerUpdateLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/DeferredLayerUpdater.cpp;l=36
+[adoptTextLayerLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/TextureLayer.java;l=144
+[tLayerLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/TextureLayer.java;l=39
+[SfTConstructorLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/graphics/java/android/graphics/SurfaceTexture.java;l=166
+[nativeInitLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/jni/android_graphics_SurfaceTexture.cpp;l=253
+[nativeSFTLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/libs/nativedisplay/surfacetexture/SurfaceTexture.cpp;l=61
+[nCreateNativeWindowLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/jni/android_view_TextureView.cpp;l=83
+[SurfaceTexture_setSurfaceTextureLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/jni/android_graphics_SurfaceTexture.cpp;l=84
+[SurfaceTexture_setProducerLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/jni/android_graphics_SurfaceTexture.cpp;l=98
+[nativeSurfaceConstructorLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/libs/gui/Surface.cpp;l=66
+[setSurfaceTextureLink1]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/TextureLayer.java;l=133
