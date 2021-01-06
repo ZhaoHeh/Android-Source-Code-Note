@@ -140,7 +140,7 @@ TextureView#draw的触发时机这里就不展开了，接下来的调用栈如�
 &emsp;&emsp;&emsp;&emsp;&emsp;[CanvasContext::createTextureLayer][ctxCreateLayerLink]  
 &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[SkiaOpenGLPipeline::createTextureLayer][pipeCreateLayerLink]  
 &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[DeferredLayerUpdater::DeferredLayerUpdater][deferredLayerUpdateLink]  
-以上，TextureView通过ThreadedRender创建了一个DeferredLayerUpdater对象，并且把这个对象的地址作为以jlong的形式传递到TextureLayer中。  
+以上，TextureView通过ThreadedRender创建了一个DeferredLayerUpdater对象，并且把这个对象的地址作为以jlong的形式传递到TextureLayer中。至于DeferredLayerUpdater中有什么信息、DeferredLayerUpdater的职能是什么我们还需要向下看。  
 &emsp;&emsp;&emsp;[TextureLayer#adoptTextureLayer][adoptTextLayerLink]  
 &emsp;&emsp;&emsp;&emsp;[TextureLayer#TextureLayer][tLayerLink]  
 TextureLayer主要保存的信息只有两个：HardwareRenderer对象TextureLayer#mRenderer和DeferredLayerUpdater对象的地址TextureLayer#mFinalizer。  
@@ -155,8 +155,33 @@ TextureLayer主要保存的信息只有两个：HardwareRenderer对象TextureLay
 （frameworks/native/libs/nativedisplay/surfacetexture/surface_texture.cpp）  
 &emsp;&emsp;&emsp;[Surface::Surface][nativeSurfaceConstructorLink]（将[SurfaceTexture#nativeInit][nativeInitLink]过程中创建的producer传递给Surface(c++)）  
 总结：SurfaceTexture保存有完整的buffer queue，其中SurfaceTexture(java)持有producer，SurfaceTexture(c++)持有consumer。同时Android系统还利用producer创建了Surface(c++)对象，并由TextureView#mNativeWindow记录保存。  
-[TextureLayer#setSurfaceTexture][setSurfaceTextureLink1]  
-[TextureLayer#nSetSurfaceTexture][]
+&emsp;&emsp;[TextureLayer#setSurfaceTexture][setSurfaceTextureLink1]  
+&emsp;&emsp;&emsp;[TextureLayer#nSetSurfaceTexture][nSetSurfaceTextureLink]  
+&emsp;&emsp;&emsp;&emsp;[DeferredLayerUpdater::setSurfaceTexture][setSurfaceTextureLink3]  
+现在，[HardwareRenderer#createTextureLayer][createLayerLink]中创建的DeferredLayerUpdater持有了[TextureView#getTextureLayer][getlayerLink]中创建的SurfaceTexture对象，而且DeferredLayerUpdater似乎只对SurfaceTexture对象作为consumer感兴趣。  
+在[TextureView#getTextureLayer][getlayerLink]中还有一段代码值得注意：  
+
+```java
+            if (mListener != null && createNewSurface) {
+                mListener.onSurfaceTextureAvailable(mSurface, getWidth(), getHeight());
+            }
+```
+
+如果此时是首次执行[TextureView#draw][tvDrawLink]（代码中的体现就是TextureView#mSurface此前为null），这个时候就会调用回调，这是App开发中用的一个接口。  
+&emsp;[RecordingCanvas#drawTextureLayer][rcDrawTextureLayerLink]  
+&emsp;&emsp;[RecordingCanvas#nDrawTextureLayer][nDrawTextureLayerLink]（这里的第二个参数是通过TextureLayer#getLayerHandle获取的，实际上就是TextureLayer#mFinalizer，也就是DeferredLayerUpdater对象的唯一地址，这里不得不吐槽代码作者命名的曲折，让人没有办法一眼看出来）  
+&emsp;&emsp;&emsp;[SkiaRecordingCanvas::drawLayer][nativeCanvasDrawLayerLink]（这里只是推测Canvas(c++)的实现是SkiaRecordingCanvas(c++)，但是并没有证据）  
+这里有关“draw”的调用链条太过复杂，当然根本原因在于我还没有弄清楚Canvas这个概念所起的作用，因此我们不展开讨论，仅看和DeferredLayerUpdater有关的内容。  
+[LayerDrawable::onDraw][LayerDrawableOnDrawLink]  
+[LayerDrawable::DrawLayer][DrawLayerLink]  
+涉及DeferredLayerUpdater的就是获取DeferredLayerUpdater中持有的[android::uirenderer::Layer][LayerLink]对象。但是，DeferredLayerUpdater::Layer是什么时候被赋值和修改的呢？上面我们只涉及到了DeferredLayerUpdater的实例化呀！！！
+
+## 附
+
+### 1. Canvas的继承关系
+
+[RecordingCanvas][RecordingCanvasLink] -> [DisplayListCanvas][DisplayListCanvasLink] -> [BaseRecordingCanvas][BaseRecordingCanvasLink] -> [Canvas][CanvasLink] -> [BaseCanvas][BaseCanvasLink]  
+[SkiaRecordingCanvas][SkiaRecordingCanvasLink] -> [SkiaCanvas][SkiaCanvasLink] -> [Canvas][NativeCanvasLink]
 
 [buildLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/SurfaceControl.java;l=645
 [ctrlLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/SurfaceControl.java;l=961
@@ -197,3 +222,24 @@ TextureLayer主要保存的信息只有两个：HardwareRenderer对象TextureLay
 [SurfaceTexture_setProducerLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/jni/android_graphics_SurfaceTexture.cpp;l=98
 [nativeSurfaceConstructorLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/libs/gui/Surface.cpp;l=66
 [setSurfaceTextureLink1]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/TextureLayer.java;l=133
+[nSetSurfaceTextureLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/jni/android_graphics_TextureLayer.cpp;l=53
+[setSurfaceTextureLink3]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/DeferredLayerUpdater.cpp;l=53
+
+[rcDrawTextureLayerLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/graphics/java/android/graphics/RecordingCanvas.java;l=228
+[nDrawTextureLayerLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/jni/android_graphics_DisplayListCanvas.cpp;l=144
+[nativeCanvasDrawLayerLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/pipeline/skia/SkiaRecordingCanvas.cpp;l=108
+
+[RecordingCanvasLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/graphics/java/android/graphics/RecordingCanvas.java
+[DisplayListCanvasLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/DisplayListCanvas.java;l=31
+[BaseRecordingCanvasLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/graphics/java/android/graphics/BaseRecordingCanvas.java;l=41
+[CanvasLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/graphics/java/android/graphics/Canvas.java;l=52
+[BaseCanvasLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/graphics/java/android/graphics/BaseCanvas.java;l=43
+
+[SkiaRecordingCanvasLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/pipeline/skia/SkiaRecordingCanvas.h
+[SkiaCanvasLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/SkiaCanvas.h
+[NativeCanvasLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/hwui/Canvas.h
+
+[LayerDrawableOnDrawLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/pipeline/skia/LayerDrawable.cpp;l=29
+[DrawLayerLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/pipeline/skia/LayerDrawable.cpp;l=70
+
+[LayerLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/Layer.h
