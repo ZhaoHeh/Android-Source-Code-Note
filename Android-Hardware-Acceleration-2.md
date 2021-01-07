@@ -35,7 +35,7 @@
 &emsp;&emsp;&emsp;[ThreadedRenderer#draw][ThreadedRendererDrawLink]  
 &emsp;&emsp;&emsp;&emsp;[ThreadedRenderer#updateRootDisplayList][updateRootDisplayListLink]  
 
-## 1. UPDATE
+## 1. ThreadedRenderer#updateRootDisplayList
 
 ```java
     private void updateRootDisplayList(View view, DrawCallbacks callbacks) {
