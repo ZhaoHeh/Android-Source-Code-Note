@@ -2,7 +2,7 @@
 
 [ViewRootImpl#performTraversals][performTraversalsLink]  
 &emsp;[ViewRootImpl#performDraw][performDrawLink]  
-&emsp;&emsp;[ViewRootImpl#draw][drawLink]  
+&emsp;&emsp;[ViewRootImpl#draw][drawLink]，代码如下：  
 
 ```java
     private boolean draw(boolean fullRedrawNeeded) {
@@ -32,10 +32,45 @@
 // 代码路径：frameworks/base/core/java/android/view/ViewRootImpl.java
 ```
 
-&emsp;&emsp;&emsp;[ThreadedRenderer#draw][ThreadedRendererDrawLink]  
-&emsp;&emsp;&emsp;&emsp;[ThreadedRenderer#updateRootDisplayList][updateRootDisplayListLink]  
+&emsp;&emsp;&emsp;[ThreadedRenderer#draw][ThreadedRendererDrawLink]，代码如下：  
 
-## 1. ThreadedRenderer#updateRootDisplayList
+```java
+    void draw(View view, AttachInfo attachInfo, DrawCallbacks callbacks) {
+        final Choreographer choreographer = attachInfo.mViewRootImpl.mChoreographer;
+        choreographer.mFrameInfo.markDrawStart();
+
+        updateRootDisplayList(view, callbacks);
+
+        // register animating rendernodes which started animating prior to renderer
+        // creation, which is typical for animators started prior to first draw
+        if (attachInfo.mPendingAnimatingRenderNodes != null) {
+            final int count = attachInfo.mPendingAnimatingRenderNodes.size();
+            for (int i = 0; i < count; i++) {
+                registerAnimatingRenderNode(
+                        attachInfo.mPendingAnimatingRenderNodes.get(i));
+            }
+            attachInfo.mPendingAnimatingRenderNodes.clear();
+            // We don't need this anymore as subsequent calls to
+            // ViewRootImpl#attachRenderNodeAnimator will go directly to us.
+            attachInfo.mPendingAnimatingRenderNodes = null;
+        }
+
+        int syncResult = syncAndDrawFrame(choreographer.mFrameInfo);
+        if ((syncResult & SYNC_LOST_SURFACE_REWARD_IF_FOUND) != 0) {
+            Log.w("OpenGLRenderer", "Surface lost, forcing relayout");
+            // We lost our surface. For a relayout next frame which should give us a new
+            // surface from WindowManager, which hopefully will work.
+            attachInfo.mViewRootImpl.mForceNextWindowRelayout = true;
+            attachInfo.mViewRootImpl.requestLayout();
+        }
+        if ((syncResult & SYNC_REDRAW_REQUESTED) != 0) {
+            attachInfo.mViewRootImpl.invalidate();
+        }
+    }
+// 代码路径：frameworks/base/core/java/android/view/ThreadedRenderer.java
+```
+
+&emsp;&emsp;&emsp;&emsp;[ThreadedRenderer#updateRootDisplayList][updateRootDisplayListLink]，代码如下：  
 
 ```java
     private void updateRootDisplayList(View view, DrawCallbacks callbacks) {
@@ -78,11 +113,15 @@
 // 代码路径：frameworks/base/core/java/android/view/ThreadedRenderer.java
 ```
 
+先以几条未经代码证明的断言作为说明，以总括整篇文章，后面的分析都不会出这几条断言的圈：  
+
 1. display list在Java层的体现就是[android.graphics.RenderNode][RenderNodeLink]类；ThreadedRenderer持有window对应的RenderNode：[HardwareRenderer#mRootNode][mRootNodeLink]；DecorView持有root view对应的RenderNode：[View#mRenderNode][ViewMRenderNodeLink]。
 
 2. **更新**当前window的display list，就是将root view的display list记录到window的display list中，实际的操作就是用canvas的draw方法修改native的数据。
 
-3. **更新**的前提条件是```mRootNodeNeedsUpdate || !mRootNode.hasDisplayList()```。
+3. canvas和display list的关系可以说是是临时性的，canvas对象只有在draw的时候才会new或者向对象池申请；render node和display list的关系则是强绑定且一一对应的。
+
+## 1. updateViewTreeDisplayList(view)：called by ThreadedRenderer#updateRootDisplayList
 
 ## 2. mRootNode.beginRecording：called by ThreadedRenderer#updateRootDisplayList
 
@@ -132,7 +171,7 @@ void SkiaRecordingCanvas::drawRenderNode(uirenderer::RenderNode* renderNode) {
 &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[SkiaCanvas::drawDrawable][SkiaCanvasDrawDrawableLink]  
 &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[SkCanvas::drawDrawable][SkCanvasDrawDrawableLink]（注意SkCanvas::drawDrawable的[函数声明][FunctionDeclarationLink]，第二个参数可以不显示指定）  
 &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[SkCanvas::onDrawDrawable][SkCanvasOnDrawDrawableLink]  
-&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[SkBaseDevice::drawDrawable][SkBaseDeviceDrawDrawableLink]（这一层调用的意义是什么？？？） 
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[SkBaseDevice::drawDrawable][SkBaseDeviceDrawDrawableLink]（这一层调用的意义是什么？？？）  
 
 下面高能，这几个函数没一个看得懂的：  
 
@@ -150,6 +189,15 @@ void SkiaRecordingCanvas::drawRenderNode(uirenderer::RenderNode* renderNode) {
 （3）root view也持有一个对应的render node，render node也会有一个对应的display list。  
 （4）RecordingCanvas#drawRenderNode就是一个把root view对应的display list map到window此时对应的那个canvas中持有的sk canvas中的过程。  
 （5）这里面细节很多，我们暂时顾不上，只能以后再说，但是注意，Skia和OpenGL的联系我们还没找到呢！！！
+
+## 4. mRootNode.endRecording：called by ThreadedRenderer#updateRootDisplayList
+
+&emsp;&emsp;&emsp;&emsp;&emsp;[RenderNode#endRecording][endRecordingLink]  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[RecordingCanvas#finishRecording][RCfinishRecordingLink]  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[RecordingCanvas#nFinishRecording][RCnFinishRecordingLink]  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[SkiaRecordingCanvas::finishRecording(][SKRCfinishRecordingLink]  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[RenderNode#nSetDisplayList][nSetDisplayListLink]  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[RenderNode::setStagingDisplayList][setStagingDisplayListLink]  
 
 ## 附
 
@@ -206,6 +254,13 @@ view：视图
 [RenderNodeDrawableDrawContentLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/pipeline/skia/RenderNodeDrawable.cpp;l=203
 [SkiaDisplayListDrawLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/pipeline/skia/SkiaDisplayList.h;l=143
 [DisplayListDataDrawLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/RecordingCanvas.cpp;l=740
+
+[endRecordingLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/graphics/java/android/graphics/RenderNode.java;l=402
+[RCfinishRecordingLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/graphics/java/android/graphics/RecordingCanvas.java;l=79
+[RCnFinishRecordingLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/jni/android_graphics_DisplayListCanvas.cpp;l=133
+[SKRCfinishRecordingLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/pipeline/skia/SkiaRecordingCanvas.cpp;l=58
+[nSetDisplayListLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/jni/android_graphics_RenderNode.cpp;l=79
+[setStagingDisplayListLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/RenderNode.cpp;l=77
 
 [RecordingCanvasLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/graphics/java/android/graphics/RecordingCanvas.java
 [DisplayListCanvasLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/DisplayListCanvas.java;l=31
