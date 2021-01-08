@@ -154,15 +154,17 @@
 条件二如果不满足则进入调用栈二：  
 
 &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[RenderNode#beginRecording][beginRecordingLink]（注意：这里的render node是root view的）  
-&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[RenderNode#beginRecording][beginRecordingLink]（注意：这里的render node是root view的）  
 如果```if (layerType == LAYER_TYPE_SOFTWARE)```（这个条件意味着什么？？？？），则：  
 &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[BaseRecordingCanvas#drawBitmap][BRCanvasDrawBitmapLink]  
 &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[BaseRecordingCanvas#nDrawBitmap][android_graphics_Canvas_drawBitmapLink]  
 &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[SkiaRecordingCanvas::drawBitmap][SkiaRecordingCanvasDrawBitmapLink]  
 &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[RecordingCanvas::drawImage][RecordingCanvasDrawImageLink]（这是连接App native层和Skia的操作，而且涉及到了跨线程）  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[DisplayListData::drawImage][fDLDrawImageLink]  
 反之，调用栈如下：  
-&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[View#draw][]
-
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[View#draw][ViewDrawLink]  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[View#onDraw][ViewDrawLink]  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[ViewGroup#dispatchDraw][ViewOnDrawLink]  
+最后，全部画完开始执行：  
 &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[RenderNode#endRecording][endRecordingLink]（注意：这里的render node是root view的）  
 
 ## 2. mRootNode.beginRecording：called by ThreadedRenderer#updateRootDisplayList
@@ -245,6 +247,32 @@ void SkiaRecordingCanvas::drawRenderNode(uirenderer::RenderNode* renderNode) {
 
 （1）window的render node进入endRecording，会使render node临时使用的android app的window的canvas进入finishRecording，此canvas又会使Skia的canvas进入restore的执行。  
 （2）在beginRecording时，window的render node把RenderNode#mAvailableDisplayList赋值给canvas的SkiaRecordingCanvas#mDisplayList；到了endRecording，canvas释放了SkiaRecordingCanvas#mDisplayList后，把它反赋值给render node的RenderNode#mStagingDisplayList。  
+
+## 5. 已经简单的自定义组件经历了什么
+
+```java
+    @Override
+    protected void onDraw(Canvas canvas) {
+        super.onDraw(canvas);
+        // 省略部分代码
+        // Draw the example drawable on top of the text.
+        if (mDrawable != null) {
+            mDrawable.setBounds(paddingLeft, paddingTop,
+                    paddingLeft + contentWidth, paddingTop + contentHeight);
+            mDrawable.draw(canvas);
+        }
+
+        // Draw the text.
+        canvas.drawText(mMyBtnViewText,
+                paddingLeft + (contentWidth - mTextWidth) / 2,
+                paddingTop + (contentHeight + mTextHeight) / 2,
+                mTextPaint);
+    }
+```
+
+我们再来看一个自定义组件的onDraw函数做了什么：  
+（1）根据第一小节的分析，可以知道参数canvas来自root view。  
+（2）自定义view不必关心当前渲染是CPU渲染还是GPU渲染。但是传下来的这个参数canvas已经决定了。如果canvas来自于[View#updateDisplayListIfDirty][updateDisplayListIfDirtyLink]，则canvas通过render node产生，onDraw回调的时候已经意味着自定义view要在GPU对应的canvas上draw了。  
 
 ## 附
 
@@ -329,3 +357,8 @@ view：视图
 [android_graphics_Canvas_drawBitmapLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/jni/android_graphics_Canvas.cpp;l=433
 [SkiaRecordingCanvasDrawBitmapLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/pipeline/skia/SkiaRecordingCanvas.cpp;l=224
 [RecordingCanvasDrawImageLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/RecordingCanvas.cpp;l=950
+[fDLDrawImageLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/RecordingCanvas.cpp;l=950
+
+[ViewDrawLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/View.java;l=22321
+[ViewOnDrawLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/View.java;l=19908
+
