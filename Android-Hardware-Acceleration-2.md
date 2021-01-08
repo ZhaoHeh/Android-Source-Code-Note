@@ -123,6 +123,48 @@
 
 ## 1. updateViewTreeDisplayList(view)：called by ThreadedRenderer#updateRootDisplayList
 
+&emsp;&emsp;&emsp;&emsp;&emsp;[ThreadedRenderer#updateViewTreeDisplayList][updateViewTreeDisplayListLink]  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[View#updateDisplayListIfDirty][updateDisplayListIfDirtyLink]（注意：这里的具体实现是root view：DecorView）  
+
+在View#updateDisplayListIfDirty中，首先有一个大前提（我们称为条件一），当这个大前提满足时，才会进入有实际意义的执行，代码如下：
+
+```java
+        if ((mPrivateFlags & PFLAG_DRAWING_CACHE_VALID) == 0
+                || !renderNode.hasDisplayList()
+                || (mRecreateDisplayList)) {
+// 文件路径：frameworks/base/core/java/android/view/View.java
+```
+
+在条件一满足时，如果出现如下小前提（条件二），则调用栈如调用栈一所示：
+
+```java
+            if (renderNode.hasDisplayList()
+                    && !mRecreateDisplayList) {
+// 文件路径：frameworks/base/core/java/android/view/View.java
+```
+
+调用栈一：
+
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[ViewGroup#dispatchGetDisplayList][ViewGroupDispatchGetDisplayListLink]（DecorView继承自ViewGroup）  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[ViewGroup#recreateChildDisplayList][recreateChildDisplayListLink]  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[View#updateDisplayListIfDirty][updateDisplayListIfDirtyLink]（注意：这里的具体实现应该是root view(DecorView)的一个个child们）  
+
+总结：如果条件一、条件二同时满足，则走调用栈一，也就是说root view什么也不做，开始递归执行其child view们的updateDisplayListIfDirty函数。  
+
+条件二如果不满足则进入调用栈二：  
+
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[RenderNode#beginRecording][beginRecordingLink]（注意：这里的render node是root view的）  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[RenderNode#beginRecording][beginRecordingLink]（注意：这里的render node是root view的）  
+如果```if (layerType == LAYER_TYPE_SOFTWARE)```（这个条件意味着什么？？？？），则：  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[BaseRecordingCanvas#drawBitmap][BRCanvasDrawBitmapLink]  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[BaseRecordingCanvas#nDrawBitmap][android_graphics_Canvas_drawBitmapLink]  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[SkiaRecordingCanvas::drawBitmap][SkiaRecordingCanvasDrawBitmapLink]  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[RecordingCanvas::drawImage][RecordingCanvasDrawImageLink]（这是连接App native层和Skia的操作，而且涉及到了跨线程）  
+反之，调用栈如下：  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[View#draw][]
+
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[RenderNode#endRecording][endRecordingLink]（注意：这里的render node是root view的）  
+
 ## 2. mRootNode.beginRecording：called by ThreadedRenderer#updateRootDisplayList
 
 &emsp;&emsp;&emsp;&emsp;&emsp;[RenderNode#beginRecording][beginRecordingLink]  
@@ -195,9 +237,14 @@ void SkiaRecordingCanvas::drawRenderNode(uirenderer::RenderNode* renderNode) {
 &emsp;&emsp;&emsp;&emsp;&emsp;[RenderNode#endRecording][endRecordingLink]  
 &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[RecordingCanvas#finishRecording][RCfinishRecordingLink]  
 &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[RecordingCanvas#nFinishRecording][RCnFinishRecordingLink]  
-&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[SkiaRecordingCanvas::finishRecording(][SKRCfinishRecordingLink]  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[SkiaRecordingCanvas::finishRecording][SKRCfinishRecordingLink]  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[SkCanvas::restoreToCount][SkCRestoreToCountLink]  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[SkCanvas::restore][SkCanvasRestoreLink]  
 &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[RenderNode#nSetDisplayList][nSetDisplayListLink]  
 &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[RenderNode::setStagingDisplayList][setStagingDisplayListLink]  
+
+（1）window的render node进入endRecording，会使render node临时使用的android app的window的canvas进入finishRecording，此canvas又会使Skia的canvas进入restore的执行。  
+（2）在beginRecording时，window的render node把RenderNode#mAvailableDisplayList赋值给canvas的SkiaRecordingCanvas#mDisplayList；到了endRecording，canvas释放了SkiaRecordingCanvas#mDisplayList后，把它反赋值给render node的RenderNode#mStagingDisplayList。  
 
 ## 附
 
@@ -206,7 +253,7 @@ void SkiaRecordingCanvas::drawRenderNode(uirenderer::RenderNode* renderNode) {
 [RecordingCanvas][RecordingCanvasLink] -> [DisplayListCanvas][DisplayListCanvasLink] -> [BaseRecordingCanvas][BaseRecordingCanvasLink] -> [Canvas][CanvasLink] -> [BaseCanvas][BaseCanvasLink]  
 [SkiaRecordingCanvas][SkiaRecordingCanvasLink] -> [SkiaCanvas][SkiaCanvasLink] -> [Canvas][NativeCanvasLink]
 
-### 中英文对照
+### 名词约定与释义
 
 window：窗口  
 view：视图  
@@ -252,6 +299,8 @@ view：视图
 [RenderNodeDrawableOnDrawLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/pipeline/skia/RenderNodeDrawable.cpp;l=109
 [RenderNodeDrawableForceDrawLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/pipeline/skia/RenderNodeDrawable.cpp;l=135
 [RenderNodeDrawableDrawContentLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/pipeline/skia/RenderNodeDrawable.cpp;l=203
+[SkCRestoreToCountLink]:https://cs.android.com/android/platform/superproject/+/master:external/skia/src/core/SkCanvas.cpp;l=770
+[SkCanvasRestoreLink]:https://cs.android.com/android/platform/superproject/+/master:external/skia/src/core/SkCanvas.cpp;l=753
 [SkiaDisplayListDrawLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/pipeline/skia/SkiaDisplayList.h;l=143
 [DisplayListDataDrawLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/RecordingCanvas.cpp;l=740
 
@@ -271,3 +320,12 @@ view：视图
 [SkiaRecordingCanvasLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/pipeline/skia/SkiaRecordingCanvas.h
 [SkiaCanvasLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/SkiaCanvas.h
 [NativeCanvasLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/hwui/Canvas.h
+
+[updateViewTreeDisplayListLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ThreadedRenderer.java;l=554
+[updateDisplayListIfDirtyLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/View.java;l=21169
+[ViewGroupDispatchGetDisplayListLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ViewGroup.java;l=4467
+[recreateChildDisplayListLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ViewGroup.java;l=4497
+[BRCanvasDrawBitmapLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/graphics/java/android/graphics/BaseRecordingCanvas.java;l=67
+[android_graphics_Canvas_drawBitmapLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/jni/android_graphics_Canvas.cpp;l=433
+[SkiaRecordingCanvasDrawBitmapLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/pipeline/skia/SkiaRecordingCanvas.cpp;l=224
+[RecordingCanvasDrawImageLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/RecordingCanvas.cpp;l=950
