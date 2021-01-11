@@ -113,47 +113,76 @@
 // 代码路径：frameworks/base/core/java/android/view/ThreadedRenderer.java
 ```
 
-先以几条未经代码证明的断言作为说明，以总括整篇文章，后面的分析都不会出这几条断言的圈：  
+先以几条未经代码证明的断言作为说明，以总括整篇文章，后面的分析都不会跳出出这几条断言的圈：  
 
 1. display list在Java层的体现就是[android.graphics.RenderNode][RenderNodeLink]类；ThreadedRenderer持有window对应的RenderNode：[HardwareRenderer#mRootNode][mRootNodeLink]；DecorView持有root view对应的RenderNode：[View#mRenderNode][ViewMRenderNodeLink]。
 
 2. **更新**当前window的display list，就是将root view的display list记录到window的display list中，实际的操作就是用canvas的draw方法修改native的数据。
 
-3. canvas和display list的关系可以说是是临时性的，canvas对象只有在draw的时候才会new或者向对象池申请；render node和display list的关系则是强绑定且一一对应的。
+3. canvas和display list的关系可以说是临时性的，canvas对象只有在draw的时候才会new或者向对象池申请；render node和display list的关系则是强绑定且一一对应的。
 
-## 1. updateViewTreeDisplayList(view)：called by ThreadedRenderer#updateRootDisplayList
+## **1. updateViewTreeDisplayList(view)：called by ThreadedRenderer#updateRootDisplayList**
 
 &emsp;&emsp;&emsp;&emsp;&emsp;[ThreadedRenderer#updateViewTreeDisplayList][updateViewTreeDisplayListLink]  
-&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[View#updateDisplayListIfDirty][updateDisplayListIfDirtyLink]（注意：这里的具体实现是root view：DecorView）  
-
-在View#updateDisplayListIfDirty中，首先有一个大前提（我们称为条件一），当这个大前提满足时，才会进入有实际意义的执行，代码如下：
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[View#updateDisplayListIfDirty][updateDisplayListIfDirtyLink]（注意：此时此刻的具体实现者是root view：DecorView）  
 
 ```java
+    public RenderNode updateDisplayListIfDirty() {
+        final RenderNode renderNode = mRenderNode;
+        // ... 省略代码
         if ((mPrivateFlags & PFLAG_DRAWING_CACHE_VALID) == 0
                 || !renderNode.hasDisplayList()
                 || (mRecreateDisplayList)) {
-// 文件路径：frameworks/base/core/java/android/view/View.java
-```
-
-在条件一满足时，如果出现如下小前提（条件二），则调用栈如调用栈一所示：
-
-```java
+            // Don't need to recreate the display list, just need to tell our
+            // children to restore/recreate theirs
             if (renderNode.hasDisplayList()
                     && !mRecreateDisplayList) {
+                mPrivateFlags |= PFLAG_DRAWN | PFLAG_DRAWING_CACHE_VALID;
+                mPrivateFlags &= ~PFLAG_DIRTY_MASK;
+                dispatchGetDisplayList();
+
+                return renderNode; // no work needed
+            }
+
+            // If we got here, we're recreating it. Mark it as such to ensure that
+            // we copy in child display lists into ours in drawChild()
+            mRecreateDisplayList = true;
+            // ... 省略代码
+            final RecordingCanvas canvas = renderNode.beginRecording(width, height);
+
+            try {
+                if (layerType == LAYER_TYPE_SOFTWARE) {
+                    buildDrawingCache(true);
+                    Bitmap cache = getDrawingCache(true);
+                    if (cache != null) {
+                        canvas.drawBitmap(cache, 0, 0, mLayerPaint);
+                    }
+                } else {
+                    // ... 省略代码
+                        draw(canvas);
+                }
+            } finally {
+                renderNode.endRecording();
+                setDisplayListProperties(renderNode);
+            }
+        }
+        // ... 省略代码
+        return renderNode;
+    }
 // 文件路径：frameworks/base/core/java/android/view/View.java
 ```
 
-调用栈一：
+```(mPrivateFlags & PFLAG_DRAWING_CACHE_VALID) == 0```表明上次构建的display list已经失效，需要重新构建：  
 
 &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[ViewGroup#dispatchGetDisplayList][ViewGroupDispatchGetDisplayListLink]（DecorView继承自ViewGroup）  
 &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[ViewGroup#recreateChildDisplayList][recreateChildDisplayListLink]  
 &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[View#updateDisplayListIfDirty][updateDisplayListIfDirtyLink]（注意：这里的具体实现应该是root view(DecorView)的一个个child们）  
 
-总结：如果条件一、条件二同时满足，则走调用栈一，也就是说root view什么也不做，开始递归执行其child view们的updateDisplayListIfDirty函数。  
+总结：上述调用表明：此时root view什么也需要不做，只需要开始递归执行其child view们的updateDisplayListIfDirty函数。  
 
-条件二如果不满足则进入调用栈二：  
+```!renderNode.hasDisplayList()```表明root view的render node内的display list data还没有设置过或者已经被销毁，```(mRecreateDisplayList)```则是一个直接出发重新构建display list的flag值，这两个条件任意一个为true都会触发如下调用栈：  
 
-&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[RenderNode#beginRecording][beginRecordingLink]（注意：这里的render node是root view的）  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[RenderNode#beginRecording][beginRecordingLink]（注意：这里的render node是root view的，所以获取的canvas也是root view的）  
 如果```if (layerType == LAYER_TYPE_SOFTWARE)```（这个条件意味着什么？？？？），则：  
 &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[BaseRecordingCanvas#drawBitmap][BRCanvasDrawBitmapLink]  
 &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[BaseRecordingCanvas#nDrawBitmap][android_graphics_Canvas_drawBitmapLink]  
@@ -161,9 +190,12 @@
 &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[RecordingCanvas::drawImage][RecordingCanvasDrawImageLink]（这是连接App native层和Skia的操作，而且涉及到了跨线程）  
 &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[DisplayListData::drawImage][fDLDrawImageLink]  
 反之，调用栈如下：  
-&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[View#draw][ViewDrawLink]  
-&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[View#onDraw][ViewDrawLink]  
-&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[ViewGroup#dispatchDraw][ViewOnDrawLink]  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[View#draw][ViewDrawLink]（注意，此时的实现者是root view）  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[View#onDraw][ViewDrawLink]（注意，此时的实现者仍是root view）  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[ViewGroup#dispatchDraw][ViewGroupDispatchDrawLink]（注意，此时的实现者仍是root view）  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[ViewGroup#drawChild][ViewGroupDrawChildLink]（注意，此时的实现者仍是root view）  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[View#draw][ViewDrawLink]（注意，此时的实现者已经变成了root view的第一级子view，这是一个递归调用）  
+
 最后，全部画完开始执行：  
 &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[RenderNode#endRecording][endRecordingLink]（注意：这里的render node是root view的）  
 
@@ -274,6 +306,41 @@ void SkiaRecordingCanvas::drawRenderNode(uirenderer::RenderNode* renderNode) {
 （1）根据第一小节的分析，可以知道参数canvas来自root view。  
 （2）自定义view不必关心当前渲染是CPU渲染还是GPU渲染。但是传下来的这个参数canvas已经决定了。如果canvas来自于[View#updateDisplayListIfDirty][updateDisplayListIfDirtyLink]，则canvas通过render node产生，onDraw回调的时候已经意味着自定义view要在GPU对应的canvas上draw了。  
 
+## 6. 如果刚巧root view的子孙中有一个TextureView
+
+[TextureView#draw][TextureViewDrawLink]  
+
+```java
+    @Override
+    public final void draw(Canvas canvas) {
+        // NOTE: Maintain this carefully (see View#draw)
+        mPrivateFlags = (mPrivateFlags & ~PFLAG_DIRTY_MASK) | PFLAG_DRAWN;
+
+        /* Simplify drawing to guarantee the layer is the only thing drawn - so e.g. no background,
+        scrolling, or fading edges. This guarantees all drawing is in the layer, so drawing
+        properties (alpha, layer paint) affect all of the content of a TextureView. */
+
+        if (canvas.isHardwareAccelerated()) {
+            RecordingCanvas recordingCanvas = (RecordingCanvas) canvas;
+
+            TextureLayer layer = getTextureLayer();
+            if (layer != null) {
+                applyUpdate();
+                applyTransformMatrix();
+
+                mLayer.setLayerPaint(mLayerPaint); // ensure layer paint is up to date
+                recordingCanvas.drawTextureLayer(layer);
+            }
+        }
+    }
+// 文件路径：frameworks/base/core/java/android/view/TextureView.java
+```
+
+&emsp;[TextureView#getTextureLayer][getTextureLayerLink]  
+
+[TextureViewDrawLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/TextureView.java;l=341
+[getTextureLayerLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/TextureView.java;l=385
+
 ## 附
 
 ### Canvas的继承关系
@@ -361,4 +428,5 @@ view：视图
 
 [ViewDrawLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/View.java;l=22321
 [ViewOnDrawLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/View.java;l=19908
-
+[ViewGroupDispatchDrawLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ViewGroup.java;l=4204
+[ViewGroupDrawChildLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ViewGroup.java;l=4515
