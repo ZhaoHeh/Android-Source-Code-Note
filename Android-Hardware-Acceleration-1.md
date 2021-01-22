@@ -1,12 +1,5 @@
 # Android的硬件加速渲染机制探究
 
-Android应用程序UI硬件加速渲染环境的核心可以说是Render Thread，下面的内容就围绕Render Thread展开论述，主要的关注点就是：  
-（1）初始化：创建Render Thread的过程  
-（2）初始化2：通过Render Thread创建EGL Surface的过程  
-（3）业务执行：通过Render Thread渲染一帧画面的过程  
-
-## 1. 创建Render Thread
-
 ```java
     /**
      * We have one child
@@ -34,22 +27,52 @@ Android应用程序UI硬件加速渲染环境的核心可以说是Render Thread�
             }
         }
     }
+// 代码路径：frameworks/base/core/java/android/view/ViewRootImpl.java
 ```
 
-主要的调用栈：  
-[ViewRootImpl#setView][setView]  
-&emsp;[ViewRootImpl#enableHardwareAcceleration][enableHardwareAcceleration]  
-&emsp;&emsp;[ThreadedRenderer#create][ThreadedRendererCreadte]  
+调用时机：SubActivity#onCreate -> SubActivity#setContentView -> ... -> [ViewRootImpl#setView][setView] -> [ViewRootImpl#enableHardwareAcceleration][enableHardwareAcceleration]  
+
+从ViewRootImpl#enableHardwareAcceleration开始的调用栈：  
+
+[ViewRootImpl#enableHardwareAcceleration][enableHardwareAcceleration]  
+&emsp;[ThreadedRenderer#create][ThreadedRendererCreadte]  
+&emsp;&emsp;[ThreadedRenderer#ThreadedRenderer][ThreadedRendererConstructorLink]  
 &emsp;&emsp;&emsp;[HardwareRenderer#HardwareRenderer][HardwareRenderer]  
+下面会进入native层执行，实例化一系列C++对象：  
+&emsp;&emsp;&emsp;&emsp;[HardwareRenderer#nCreateRootRenderNode][nCreateRootRenderNodeLink]（创建窗口的render node也即root render node）  
+&emsp;&emsp;&emsp;&emsp;&emsp;[RootRenderNode::RootRenderNode][RootRenderNodeLink]  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[RenderNode::RenderNode][RenderNodeLink]  
+&emsp;&emsp;&emsp;&emsp;[HardwareRenderer#nCreateProxy][nCreateProxyLink]（代理render proxy的创建过程）  
+&emsp;&emsp;&emsp;&emsp;&emsp;[RenderProxy::RenderProxy][RenderProxyLink]  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[RenderThread::getInstance][RenderThreadGetInstanceLink]（给RenderProxy::mRenderThread赋值）  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[RenderThread::RenderThread][RenderThreadConstructorLink]  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[CanvasContext::create][CanvasContextCreateLink]（给RenderProxy::mContext赋值）  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[CanvasContext::CanvasContext][CanvasContextLink]  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[DrawFrameTask::setContext][DrawFrameTaskSetCtxLink]（？？？mDrawFrameTask是什么时候被赋值的呢）  
 
-下面需要重点关注  
-（1）窗口的Render Node即Root Render Node的创建过程(nCreateRootRenderNode函数)  
+[ThreadedRendererConstructorLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ThreadedRenderer.java;l=288
+[RootRenderNodeLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/RootRenderNode.h;l=32
+[RenderNodeLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/RenderNode.cpp;l=61
+[RenderProxyLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/RenderProxy.cpp;l=36
+[RenderThreadGetInstanceLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/RenderThread.cpp;l=118
+[RenderThreadConstructorLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/RenderThread.cpp;l=127
+[CanvasContextCreateLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/CanvasContext.cpp;l=59
+[CanvasContextLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/CanvasContext.cpp;l=97
+[DrawFrameTaskSetCtxLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/DrawFrameTask.cpp;l=40
 
-* [HardwareRenderer#nCreateRootRenderNode][android_view_ThreadedRenderer_createRootRenderNode]  
+下面进行一些名词概念的约定，以方便说明上述代码的具体流程：  
 
-（2）Main Thread向Render Thread发送命令的代理Render Proxy的创建过程(nCreateProxy函数)  
+main thread : App的UI主线程  
+root render node : HardwareRenderer#mRootNode, RenderNode#mNativeRenderNode, RootRenderNode(cpp), RenderNode(cpp)  
+render proxy : HardwareRenderer#mNativeProxy, android::uirenderer::renderthread::RenderProxy,  
+render thread : android::uirenderer::renderthread::RenderThread, android::uirenderer::ThreadBase, android::Thread  
 
-* [HardwareRenderer#nCreateProxy][android_view_ThreadedRenderer_createProxy]  
+Android应用程序UI硬件加速渲染环境的核心可以说是Render Thread，下面的内容就围绕Render Thread展开论述，主要的关注点就是：  
+（1）初始化：创建Render Thread的过程  
+（2）初始化2：通过Render Thread创建EGL Surface的过程  
+（3）业务执行：通过Render Thread渲染一帧画面的过程  
+
+## 1. 创建Render Thread
 
 这两个函数会牵扯出几个重要的native类:  
 [RenderNode][RenderNodeLink](Path: frameworks/base/libs/hwui/RenderNode.cpp)  
@@ -188,8 +211,8 @@ Android应用程序UI硬件加速渲染环境的核心可以说是Render Thread�
 
 [ThreadedRendererCreadte]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ThreadedRenderer.java;l=252
 [HardwareRenderer]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/graphics/java/android/graphics/HardwareRenderer.java;l=157
-[android_view_ThreadedRenderer_createRootRenderNode]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/jni/android_graphics_HardwareRenderer.cpp;l=138
-[android_view_ThreadedRenderer_createProxy]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/jni/android_graphics_HardwareRenderer.cpp;l=145
+[nCreateRootRenderNodeLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/jni/android_graphics_HardwareRenderer.cpp;l=138
+[nCreateProxyLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/jni/android_graphics_HardwareRenderer.cpp;l=145
 
 [RenderNodeLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/RenderNode.cpp
 [RenderProxyLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/RenderProxy.cpp;l=36
