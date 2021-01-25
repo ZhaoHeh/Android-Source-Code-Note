@@ -1,5 +1,7 @@
 # Android的硬件加速渲染机制探究
 
+## 1. 初始化
+
 ```java
     /**
      * We have one child
@@ -50,9 +52,15 @@
 &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[CanvasContext::CanvasContext][CanvasContextLink]  
 &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[DrawFrameTask::setContext][DrawFrameTaskSetCtxLink]（？？？mDrawFrameTask是什么时候被赋值的呢）  
 
+[setView]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ViewRootImpl.java;l=977
+[enableHardwareAcceleration]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ViewRootImpl.java;l=1298
+[ThreadedRendererCreadte]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ThreadedRenderer.java;l=252
 [ThreadedRendererConstructorLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ThreadedRenderer.java;l=288
+[HardwareRenderer]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/graphics/java/android/graphics/HardwareRenderer.java;l=157
+[nCreateRootRenderNodeLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/jni/android_graphics_HardwareRenderer.cpp;l=138
 [RootRenderNodeLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/RootRenderNode.h;l=32
 [RenderNodeLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/RenderNode.cpp;l=61
+[nCreateProxyLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/jni/android_graphics_HardwareRenderer.cpp;l=145
 [RenderProxyLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/RenderProxy.cpp;l=36
 [RenderThreadGetInstanceLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/RenderThread.cpp;l=118
 [RenderThreadConstructorLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/RenderThread.cpp;l=127
@@ -63,16 +71,20 @@
 下面进行一些名词概念的约定，以方便说明上述代码的具体流程：  
 
 main thread : App的UI主线程  
-root render node : HardwareRenderer#mRootNode, RenderNode#mNativeRenderNode, RootRenderNode(cpp), RenderNode(cpp)  
-render proxy : HardwareRenderer#mNativeProxy, android::uirenderer::renderthread::RenderProxy,  
-render thread : android::uirenderer::renderthread::RenderThread, android::uirenderer::ThreadBase, android::Thread  
+root view impl : android.view.ViewRootImpl;  
+threaded renderer : android.view.ThreadedRenderer; android.graphics.HardwareRenderer;  
+root render node : HardwareRenderer#mRootNode; RenderNode#mNativeRenderNode; RootRenderNode(cpp); RenderNode(cpp);  
+render proxy : HardwareRenderer#mNativeProxy; android::uirenderer::renderthread::RenderProxy;  
+render thread : android::uirenderer::renderthread::RenderThread; android::uirenderer::ThreadBase; android::Thread;  
+
+ViewRootImpl#setView是被Activity#OnCreate调用到的，Activity#OnCreate是在main thread中进行的，因此以下逻辑是从main thread开始的：  
+root view impl实例化一个threaded renderer，threaded renderer持有两个对象，分别是root render node和render proxy。  
+render proxy
 
 Android应用程序UI硬件加速渲染环境的核心可以说是Render Thread，下面的内容就围绕Render Thread展开论述，主要的关注点就是：  
 （1）初始化：创建Render Thread的过程  
 （2）初始化2：通过Render Thread创建EGL Surface的过程  
 （3）业务执行：通过Render Thread渲染一帧画面的过程  
-
-## 1. 创建Render Thread
 
 这两个函数会牵扯出几个重要的native类:  
 [RenderNode][RenderNodeLink](Path: frameworks/base/libs/hwui/RenderNode.cpp)  
@@ -93,12 +105,6 @@ Android应用程序UI硬件加速渲染环境的核心可以说是Render Thread�
 （5）RenderThread具体的事件驱动机制目前并不清楚，老罗介绍的代码是比较旧的了  
 
 ## 2. 绑定窗口到Render Thread
-
-把老罗的原话整理一下，非常有用：  
-
-1. Activity窗口的绘制流程是在ViewRootImpl#performTraversals发起的  
-2. 在绘制之前，首先要通过ViewRootImpl#relayoutWindow向WindowManagerService申请一个surface  
-3. 一旦获得了对应的Surface，就需要将它绑定到Render Thread中  
 
 ```java
     private void performTraversals() {
@@ -141,18 +147,58 @@ Android应用程序UI硬件加速渲染环境的核心可以说是Render Thread�
 ```
 
 函数调用栈：  
-[ViewRootImpl#performTraversals][performTraversals]  
-&emsp;[ThreadedRenderer#initialize][initialize]  
-&emsp;&emsp;[ThreadedRenderer#setSurface][setSurface]  
-&emsp;&emsp;&emsp;[HardwareRenderer#setSurface][setSurface1]  
-&emsp;&emsp;&emsp;&emsp;[HardwareRenderer#nSetSurface][nSetSurface]  
-&emsp;&emsp;&emsp;&emsp;&emsp;[RenderProxy::setSurface][setSurface3]  
+[ViewRootImpl#performTraversals][performTraversalsLink]  
+&emsp;[ThreadedRenderer#initialize][RendererinitializeLink]  
+&emsp;&emsp;[ThreadedRenderer#setSurface][RendererSetSurfaceLink]  
+&emsp;&emsp;&emsp;[HardwareRenderer#setSurface][RendererSetSurfaceLink1]  
+&emsp;&emsp;&emsp;&emsp;[HardwareRenderer#nSetSurface][nSetSurfaceLink]  
+&emsp;&emsp;&emsp;&emsp;&emsp;[RenderProxy::setSurface][ProxySetSurfaceLink]  
 下面开始进入RenderThread执行：  
-&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[CanvasContext::setSurface][setSurface4]（最新的CanvasContext不再有initialize成员函数）  
-&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[SkiaOpenGLPipeline::setSurface][setSurface5]  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[CanvasContext::setSurface][CtxSetSurfaceLink]  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[SkiaOpenGLPipeline::setSurface][PipelineSetSurfaceLink]  
 &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[RenderThread::requireGlContext][requireGlContextLink]  
-&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[EglManager::initialize][EglInitLink]  
-&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[EglManager::createSurface][EglCreateSurfLink]
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[EglManager::initialize][EglMgrInitLink]  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[eglGetDisplay][eglGetDisplayLink]  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[eglInitialize][eglInitializeLink]  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[EglManager::createContext][EglMgrCreateCtxLink]  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[eglCreateContext][eglCreateContextLink]  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[EglManager::createPBufferSurface][EglMgrCreatePBSLink]  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[eglCreatePbufferSurface][eglCreatePbufferSurfaceLink]  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[EglManager::makeCurrent][EglMgrMkCurrentLink]  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[eglMakeCurrent][eglMakeCurrentLink]  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[eglSwapInterval][eglSwapIntervalLink]  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[EglManager::createSurface][EglMgrCreateSfcLink]  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[eglCreateWindowSurface][eglCreateWindowSurfaceLink]  
+
+[performTraversalsLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ViewRootImpl.java;l=2718
+[RendererinitializeLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ThreadedRenderer.java;l=361
+[RendererSetSurfaceLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ThreadedRenderer.java;l=410
+[RendererSetSurfaceLink1]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/graphics/java/android/graphics/HardwareRenderer.java;l=299
+[nSetSurfaceLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/jni/android_graphics_HardwareRenderer.cpp;l=174
+[ProxySetSurfaceLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/RenderProxy.cpp;l=79
+[CtxSetSurfaceLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/CanvasContext.cpp;l=157
+[PipelineSetSurfaceLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/pipeline/skia/SkiaOpenGLPipeline.cpp;l=160
+[requireGlContextLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/RenderThread.cpp;l=179
+
+[EglMgrInitLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/EglManager.cpp;l=101
+[EglMgrCreateSfcLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/EglManager.cpp;l=309
+[EglMgrCreateCtxLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/EglManager.cpp;l=278
+[EglMgrCreatePBSLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/EglManager.cpp;l=295
+[EglMgrMkCurrentLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/EglManager.cpp;l=401
+
+[eglGetDisplayLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/opengl/libs/EGL/eglApi.cpp;l=41
+[eglInitializeLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/opengl/libs/EGL/eglApi.cpp;l=70
+[eglCreateContextLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/opengl/libs/EGL/eglApi.cpp;l=168
+[eglCreatePbufferSurfaceLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/opengl/libs/EGL/eglApi.cpp;l=139
+[eglMakeCurrentLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/opengl/libs/EGL/eglApi.cpp;l=183
+[eglSwapIntervalLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/opengl/libs/EGL/eglApi.cpp;l=311
+[eglCreateWindowSurfaceLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/opengl/libs/EGL/eglApi.cpp;l=107
+
+把老罗的原话整理一下，非常有用：  
+
+1. Activity窗口的绘制流程是在ViewRootImpl#performTraversals发起的  
+2. 在绘制之前，首先要通过ViewRootImpl#relayoutWindow向WindowManagerService申请一个surface  
+3. 一旦获得了对应的Surface，就需要将它绑定到Render Thread中  
 
 ## 3. 渲染一帧画面
 
@@ -203,17 +249,6 @@ Android应用程序UI硬件加速渲染环境的核心可以说是Render Thread�
 &emsp;&emsp;&emsp;[SkiaOpenGLPipeline::makeCurrent][PipeMakeCurrent3]  
 &emsp;&emsp;&emsp;&emsp;[EglManager::makeCurrent][EglMakeCurrent3]  
 
-参考链接：  
-[Android应用程序UI硬件加速渲染环境初始化过程分析](https://blog.csdn.net/luoshengyang/article/details/45769759)
-
-[setView]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ViewRootImpl.java;l=977
-[enableHardwareAcceleration]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ViewRootImpl.java;l=1298
-
-[ThreadedRendererCreadte]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ThreadedRenderer.java;l=252
-[HardwareRenderer]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/graphics/java/android/graphics/HardwareRenderer.java;l=157
-[nCreateRootRenderNodeLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/jni/android_graphics_HardwareRenderer.cpp;l=138
-[nCreateProxyLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/jni/android_graphics_HardwareRenderer.cpp;l=145
-
 [RenderNodeLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/RenderNode.cpp
 [RenderProxyLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/RenderProxy.cpp;l=36
 [RenderThreadLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/RenderThread.cpp;l=127
@@ -222,18 +257,6 @@ Android应用程序UI硬件加速渲染环境的核心可以说是Render Thread�
 
 [CanvasContextLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/CanvasContext.cpp;l=59
 [CanvasContextCreateLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/CanvasContext.cpp;l=59
-
-[performTraversals]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ViewRootImpl.java;l=2718
-[initialize]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ThreadedRenderer.java;l=361
-[setSurface]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ThreadedRenderer.java;l=410
-[setSurface1]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/graphics/java/android/graphics/HardwareRenderer.java;l=299
-[nSetSurface]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/jni/android_graphics_HardwareRenderer.cpp;l=174
-[setSurface3]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/RenderProxy.cpp;l=79
-[setSurface4]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/CanvasContext.cpp;l=157
-[setSurface5]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/pipeline/skia/SkiaOpenGLPipeline.cpp;l=160
-[requireGlContextLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/RenderThread.cpp;l=179
-[EglInitLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/EglManager.cpp;l=101
-[EglCreateSurfLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/EglManager.cpp;l=309
 
 [performTraversalsLink3]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ViewRootImpl.java;l=3104
 [performDrawLink3]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ViewRootImpl.java;l=3833
@@ -249,3 +272,7 @@ Android应用程序UI硬件加速渲染环境的核心可以说是Render Thread�
 [ContextMakeCurrent3]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/CanvasContext.cpp;l=250
 [PipeMakeCurrent3]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/pipeline/skia/SkiaOpenGLPipeline.cpp;l=56
 [EglMakeCurrent3]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/EglManager.cpp;l=401
+
+参考链接：  
+[Android应用程序UI硬件加速渲染环境初始化过程分析](https://blog.csdn.net/luoshengyang/article/details/45769759)  
+[EGLSurface 和 OpenGL ES](https://source.android.com/devices/graphics/arch-egl-opengl)
