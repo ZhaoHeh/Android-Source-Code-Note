@@ -81,7 +81,7 @@
 ## 2 ThreadedRenderer#syncAndDrawFrame的调用栈
 
 &emsp;[ThreadedRenderer#syncAndDrawFrame][syncAndDrawFrameLink]  
-&emsp;&emsp;[ThreadedRenderer#nSyncAndDrawFrame][nSyncAndDrawFrameLink]  
+&emsp;&emsp;[HardwareRenderer#nSyncAndDrawFrame][nSyncAndDrawFrameLink]  
 &emsp;&emsp;&emsp;[RenderProxy::syncAndDrawFrame][proxySyncAndDrawFrameLink]  
 &emsp;&emsp;&emsp;&emsp;[DrawFrameTask::drawFrame][DrawFrameTaskDrawFrameLink]  
 &emsp;&emsp;&emsp;&emsp;&emsp;[DrawFrameTask::postAndWait][DrawFrameTaskPostAndWaitLink]，实现如下：  
@@ -183,14 +183,13 @@ void DrawFrameTask::unblockUiThread() {
 
 &emsp;[DrawFrameTask::syncFrameState][taskSyncFrameStateLink]  
 
+[taskSyncFrameStateLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/DrawFrameTask.cpp;drc=master;l=128
+
 &emsp;&emsp;[CanvasContext::makeCurrent][CanvasContextMakeCurrentLink]  
 &emsp;&emsp;&emsp;&emsp;[SkiaOpenGLPipeline::makeCurrent][SkiaOpenGLPipelineMakeCurrentLink]  
 &emsp;&emsp;&emsp;&emsp;&emsp;[EglManager::makeCurrent][EglManagerMakeCurrentLink]  
-&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[eglMakeCurrent][eglMakeCurrentLink]  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[eglMakeCurrent][eglMakeCurrentLink]（makeCurrent的机器意义是什么呢？）  
 
-makeCurrent的机器意义是什么呢？  
-
-[taskSyncFrameStateLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/DrawFrameTask.cpp;drc=master;l=128
 [CanvasContextMakeCurrentLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/CanvasContext.cpp;drc=master;l=250
 [SkiaOpenGLPipelineMakeCurrentLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/pipeline/skia/SkiaOpenGLPipeline.cpp;l=56
 [EglManagerMakeCurrentLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/EglManager.cpp;drc=master;l=401
@@ -201,3 +200,21 @@ makeCurrent的机器意义是什么呢？
 [DeferredLayerUpdaterApplyLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/DeferredLayerUpdater.cpp;l=121
 
 ### 3.2 CanvasContext::draw
+
+&emsp;[CanvasContext::draw][CanvasContextDrawLink]  
+&emsp;&emsp;[SkiaOpenGLPipeline::draw][SkiaOpenGLPipelineDrawLink]  
+&emsp;&emsp;&emsp;[SkiaPipeline::renderFrame][SkiaPipelineRenderFrameLink]  
+&emsp;&emsp;&emsp;&emsp;[SkiaPipeline::renderLayersImpl][renderLayersImplLink]  
+&emsp;&emsp;&emsp;&emsp;[SkiaPipeline::renderFrameImpl][renderFrameImplLink]  
+&emsp;&emsp;[SkiaOpenGLPipeline::swapBuffers][PipelineSwapBuffersLink]  
+&emsp;&emsp;&emsp;[EglManager::swapBuffers][EglMgrSwapBuffersLink]  
+&emsp;&emsp;&emsp;&emsp;[eglSwapBuffersWithDamageKHR][eglSwapBuffersWithDamageKHRLink]  
+
+[CanvasContextDrawLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/CanvasContext.cpp;l=457
+[SkiaOpenGLPipelineDrawLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/pipeline/skia/SkiaOpenGLPipeline.cpp;l=72
+[SkiaPipelineRenderFrameLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/pipeline/skia/SkiaPipeline.cpp;l=428
+[renderLayersImplLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/pipeline/skia/SkiaPipeline.cpp;l=87
+[renderFrameImplLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/pipeline/skia/SkiaPipeline.cpp;l=465
+[PipelineSwapBuffersLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/pipeline/skia/SkiaOpenGLPipeline.cpp;l=125
+[EglMgrSwapBuffersLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/EglManager.cpp;l=468
+[eglSwapBuffersWithDamageKHRLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/opengl/libs/EGL/eglApi.cpp;l=252

@@ -200,55 +200,6 @@ Android应用程序UI硬件加速渲染环境的核心可以说是Render Thread�
 2. 在绘制之前，首先要通过ViewRootImpl#relayoutWindow向WindowManagerService申请一个surface  
 3. 一旦获得了对应的Surface，就需要将它绑定到Render Thread中  
 
-## 3. 渲染一帧画面
-
-```java
-    private boolean draw(boolean fullRedrawNeeded) {
-        Surface surface = mSurface;
-        // ... 省略代码
-        mAttachInfo.mTreeObserver.dispatchOnDraw();
-        // ... 省略代码
-        mAttachInfo.mDrawingTime =
-                mChoreographer.getFrameTimeNanos() / TimeUtils.NANOS_PER_MS;
-
-        boolean useAsyncReport = false;
-        if (!dirty.isEmpty() || mIsAnimating || accessibilityFocusDirty) {
-            if (mAttachInfo.mThreadedRenderer != null && mAttachInfo.mThreadedRenderer.isEnabled()) {
-                // ... 省略代码
-                mAttachInfo.mThreadedRenderer.draw(mView, mAttachInfo, this);
-            } else {
-                // ... 省略代码
-                if (!drawSoftware(surface, mAttachInfo, xOffset, yOffset,
-                        scalingRequired, dirty, surfaceInsets)) {
-                    return false;
-                }
-            }
-        }
-        // ... 省略代码
-        return useAsyncReport;
-    }
-```
-
-上述代码之前的调用：  
-[ViewRootImpl#performTraversals][performTraversalsLink3]  
-&emsp;[ViewRootImpl#performDraw][performDrawLink3]  
-&emsp;&emsp;[ViewRootImpl#draw][drawLink3]  
-
-从上述代码开始继续调用：  
-[ThreadedRenderer#draw][threadedRenderDrawLink3]  
-&emsp;[HardwareRenderer#syncAndDrawFrame][syncAndDrawFrame3]  
-&emsp;&emsp;[HardwareRenderer#nSyncAndDrawFrame][nSyncAndDrawFrame3]  
-&emsp;&emsp;&emsp;[RenderProxy::syncAndDrawFrame][RenderProxySyncAndDrawFrame3]  
-&emsp;&emsp;&emsp;&emsp;[DrawFrameTask::drawFrame][TaskDrawFrame3]  
-&emsp;&emsp;&emsp;&emsp;&emsp;[DrawFrameTask::postAndWait][TaskPostAndWait3]  
-
-下面开始进入RenderThread执行：  
-[DrawFrameTask::run][DrawFrameTaskRun3]  
-&emsp;[DrawFrameTask::syncFrameState][syncFrameState3]  
-&emsp;&emsp;[CanvasContext::makeCurrent][ContextMakeCurrent3]  
-&emsp;&emsp;&emsp;[SkiaOpenGLPipeline::makeCurrent][PipeMakeCurrent3]  
-&emsp;&emsp;&emsp;&emsp;[EglManager::makeCurrent][EglMakeCurrent3]  
-
 [RenderNodeLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/RenderNode.cpp
 [RenderProxyLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/RenderProxy.cpp;l=36
 [RenderThreadLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/RenderThread.cpp;l=127
@@ -257,21 +208,6 @@ Android应用程序UI硬件加速渲染环境的核心可以说是Render Thread�
 
 [CanvasContextLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/CanvasContext.cpp;l=59
 [CanvasContextCreateLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/CanvasContext.cpp;l=59
-
-[performTraversalsLink3]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ViewRootImpl.java;l=3104
-[performDrawLink3]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ViewRootImpl.java;l=3833
-[drawLink3]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ViewRootImpl.java;l=4106
-[threadedRenderDrawLink3]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ThreadedRenderer.java;l=638
-[syncAndDrawFrame3]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/graphics/java/android/graphics/HardwareRenderer.java;l=432
-[nSyncAndDrawFrame3]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/jni/android_graphics_HardwareRenderer.cpp;l=227
-[RenderProxySyncAndDrawFrame3]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/RenderProxy.cpp;l=120
-[TaskDrawFrame3]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/DrawFrameTask.cpp;l=68
-[TaskPostAndWait3]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/DrawFrameTask.cpp;l=78
-[DrawFrameTaskRun3]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/DrawFrameTask.cpp;l=84
-[syncFrameState3]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/DrawFrameTask.cpp;l=128
-[ContextMakeCurrent3]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/CanvasContext.cpp;l=250
-[PipeMakeCurrent3]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/pipeline/skia/SkiaOpenGLPipeline.cpp;l=56
-[EglMakeCurrent3]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/renderthread/EglManager.cpp;l=401
 
 参考链接：  
 [Android应用程序UI硬件加速渲染环境初始化过程分析](https://blog.csdn.net/luoshengyang/article/details/45769759)  
