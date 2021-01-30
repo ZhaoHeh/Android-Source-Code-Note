@@ -18,6 +18,22 @@
 [binder.c](https://elixir.bootlin.com/linux/latest/source/drivers/android/binder.c)  
 [binder.h](https://elixir.bootlin.com/linux/latest/source/include/uapi/linux/android/binder.h)  
 
+## 列举一些问题
+
+1. Binder IPC机制的一次拷贝是如何实现的？
+
+2. 所有的binder服务都需要向service manager进程注册吗？自定义Binder server是如何注册的？匿名Biner会涉及这些过程吗？
+
+3. BinderProxy对象在什么时候会用到？
+
+## 划分一些部分
+
+1. Android应用进程初始化
+
+2. service manager进程初始化
+
+3. 简单的使用binder start activity的例子
+
 ## 从一个简单例子开始
 
 在某个线程中调用:  
