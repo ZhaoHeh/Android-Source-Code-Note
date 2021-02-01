@@ -12,7 +12,8 @@
 /frameworks/native/libs/binder/
 
 **native service manager:**  
-/frameworks/native/cmds/servicemanager/  
+[/frameworks/native/cmds/servicemanager/](https://cs.android.com/android/platform/superproject/+/master:frameworks/native/cmds/servicemanager/)  
+[/frameworks/native/cmds/servicemanager/main.cpp](https://cs.android.com/android/platform/superproject/+/master:frameworks/native/cmds/servicemanager/main.cpp;l=123)
 
 **binder driver（不属于AOSP，厂商源码的kernel路径下一定会找到，最新的Linux源码也已经合入，网上也可以很方便地找到）:**  
 [binder.c](https://elixir.bootlin.com/linux/latest/source/drivers/android/binder.c)  
