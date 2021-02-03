@@ -1,122 +1,140 @@
-# Zygote进程中android.os.ServiceManager类的初始化
+# Binder
 
-本篇需要阐述清楚的问题：  
+## 代码路径
 
-1. android.os.ServiceManager#sServiceManager 是一个 android.os.IServiceManager ，实际类型为 android.os.ServiceManagerProxy ；
+**java binder:**  
+/frameworks/base/core/java/android/os/Binder.java  
+/frameworks/base/core/java/android/os/BinderProxy.java  
+/frameworks/base/core/java/android/os/IBinder.java  
+/frameworks/base/core/java/android/os/ServiceManager.java  
 
-2. android.os.ServiceManagerProxy#mServiceManager 也是一个 android.os.IServiceManager ，实际类型为 android.os.IServiceManager.Stub.Proxy ；
+**native binder:**  
+/frameworks/native/libs/binder/
 
-3. android.os.IServiceManager.Stub.Proxy#mRemote 是一个 android.os.IBinder ，实际类型为 android.os.BinderProxy ；
+**native service manager:**  
+[/frameworks/native/cmds/servicemanager/](https://cs.android.com/android/platform/superproject/+/master:frameworks/native/cmds/servicemanager/)  
+[/frameworks/native/cmds/servicemanager/main.cpp](https://cs.android.com/android/platform/superproject/+/master:frameworks/native/cmds/servicemanager/main.cpp;l=123)
 
-4. android.os.BinderProxy#mNativeData 指向的是native类 android::BinderProxyNativeData 的对象， 且此对象的mObject字段实际类型为 android::BpBinder ；
+**binder driver（不属于AOSP，厂商源码的kernel路径下一定会找到，最新的Linux源码也已经合入，网上也可以很方便地找到）:**  
+[binder.c](https://elixir.bootlin.com/linux/latest/source/drivers/android/binder.c)  
+[binder.h](https://elixir.bootlin.com/linux/latest/source/include/uapi/linux/android/binder.h)  
 
-5. android::BpBinder::mHandle 是 ServiceManager 的句柄，值为0 ；
+## 列举一些问题
 
-6. Stub.asInterface函数的作用：同一进程直接返回server，不是同一进程返回一个代理作为client端；
+1. Binder IPC机制的一次拷贝是如何实现的？
 
-[static ServiceManager#getService][SvcMgrGetServiceLink]  
-&emsp;[static ServiceManager#rawGetService][SvcMgrRawGetServiceLink]  
-&emsp;&emsp;[static ServiceManager#getIServiceManager][SvcMgrGetIServiceManagerLink]  
+2. 所有的binder服务都需要向service manager进程注册吗？自定义Binder server是如何注册的？匿名Biner会涉及这些过程吗？
 
-[SvcMgrGetServiceLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/os/ServiceManager.java;l=128
-[SvcMgrRawGetServiceLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/os/ServiceManager.java;l=318
-[SvcMgrGetIServiceManagerLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/os/ServiceManager.java;l=110
+3. BinderProxy对象在什么时候会用到？
+
+## 划分一些部分
+
+1. Android应用进程初始化
+
+2. service manager进程初始化
+
+3. 简单的使用binder start activity的例子
+
+## 从一个简单例子开始
+
+在某个线程中调用:  
+
+[Activity#startActivity][ActivityStartActivityLink]  
+&emsp;[Activity#startActivityForResult][startActivityForResultLink]  
+&emsp;&emsp;[Instrumentation#execStartActivity][execStartActivityLink]  
+
+[ActivityStartActivityLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/app/Activity.java;l=5643
+[startActivityForResultLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/app/Activity.java;l=5277
+[execStartActivityLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/app/Instrumentation.java;l=1693
 
 ```java
-    @UnsupportedAppUsage
-    private static IServiceManager getIServiceManager() {
-        if (sServiceManager != null) {
-            return sServiceManager;
-        }
+            int result = ActivityTaskManager.getService().startActivity(whoThread,
+                    who.getBasePackageName(), who.getAttributionTag(), intent,
+                    intent.resolveTypeIfNeeded(who.getContentResolver()), token,
+                    target != null ? target.mEmbeddedID : null, requestCode, 0, null, options);
+// 代码路径：frameworks/base/core/java/android/app/Instrumentation.java
+```
 
-        // Find the service manager
-        sServiceManager = ServiceManagerNative
-                .asInterface(Binder.allowBlocking(BinderInternal.getContextObject()));
-        return sServiceManager;
+&emsp;&emsp;&emsp;[ActivityTaskManager#getService][ATMarGetServiceLink]  
+
+[ATMarGetServiceLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/app/ActivityTaskManager.java;l=149
+
+```java
+    /** @hide */
+    public static IActivityTaskManager getService() {
+        return IActivityTaskManagerSingleton.get();
     }
-// 代码路径：frameworks/base/core/java/android/os/ServiceManager.java
+
+    @UnsupportedAppUsage(trackingBug = 129726065)
+    private static final Singleton<IActivityTaskManager> IActivityTaskManagerSingleton =
+            new Singleton<IActivityTaskManager>() {
+                @Override
+                protected IActivityTaskManager create() {
+                    final IBinder b = ServiceManager.getService(Context.ACTIVITY_TASK_SERVICE);
+                    return IActivityTaskManager.Stub.asInterface(b);
+                }
+            };
+// 代码路径：frameworks/base/core/java/android/app/ActivityTaskManager.java
 ```
 
-在应用进程中，service manager的客户端代理就是android.os.ServiceManager#sServiceManager引用的android.os.IServiceManager对象。  
+[IActivityTaskManager.Stub#asInterface][asInterfaceLink]  
 
-&emsp;&emsp;&emsp;[static native BinderInternal#getContextObject][BinderInternalGetCtxObjLink]  
-
-[BinderInternalGetCtxObjLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/jni/android_util_Binder.cpp;l=1130
-
-```c++
-static jobject android_os_BinderInternal_getContextObject(JNIEnv* env, jobject clazz)
-{
-    sp<IBinder> b = ProcessState::self()->getContextObject(NULL);
-    return javaObjectForIBinder(env, b);
-}
-// 代码路径：frameworks/base/core/jni/android_util_Binder.cpp
-```
-
-&emsp;&emsp;&emsp;&emsp;[ProcessState::getContextObject][ProcessStateGetCtxObjLink]  
-&emsp;&emsp;&emsp;&emsp;&emsp;[ProcessState::getStrongProxyForHandle][ProcessStateGSPFHLink]  
-&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[ProcessState::lookupHandleLocked][PSLookupHandleLockedLink]  
-&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[IPCThreadState::transact][IPCTransactLink]（IBinder::PING_TRANSACTION）  
-&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[BpBinder::create][BpBinderCreateLink]  
-&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[BpBinder::BpBinder][BpBinderBpBinderLink]  
-
-[ProcessStateGetCtxObjLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/libs/binder/ProcessState.cpp;l=123
-[ProcessStateGSPFHLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/libs/binder/ProcessState.cpp;l=247
-[PSLookupHandleLockedLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/libs/binder/ProcessState.cpp;l=234
-[IPCTransactLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/libs/binder/ProcessState.cpp;l=234
-[BpBinderCreateLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/libs/binder/BpBinder.cpp;l=110
-[BpBinderBpBinderLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/libs/binder/BpBinder.cpp;l=139
-
-现在，应用进程中new了一个android::BpBinder对象，成员变量android::BpBinder::mHandle的值是0，这个mHandle实际上执行的就是Binder驱动中service manager相关的Binder实体。  
-
-&emsp;&emsp;&emsp;&emsp;[javaObjectForIBinder][javaObjectForIBinderLink]（将一个android::IBinder封装为一个android.os.BinderProxy类型）  
-&emsp;&emsp;&emsp;&emsp;&emsp;[BinderProxyNativeData][BinderProxyNativeDataLink]（将BpBinder对象封装进结构BinderProxyNativeData中）  
-&emsp;&emsp;&emsp;&emsp;&emsp;[BinderProxy#getInstance][BinderProxyGetInstanceLink]（将BinderProxyNativeData对象封装进Java对象BinderProxy中）  
-
-[javaObjectForIBinderLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/jni/android_util_Binder.cpp;l=739
-[BinderProxyNativeDataLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/jni/android_util_Binder.cpp;l=720
-[BinderProxyGetInstanceLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/jni/android_util_Binder.cpp;l=757
-
-&emsp;&emsp;&emsp;[static Binder#allowBlocking][BinderAllowBlockingLink]  
-&emsp;&emsp;&emsp;[static ServiceManagerNative#asInterface][SvcMgrNtvAsInterfaceLink]  
-&emsp;&emsp;&emsp;&emsp;[ServiceManagerProxy#ServiceManagerProxy][ServiceManagerProxyLink]  
-&emsp;&emsp;&emsp;&emsp;&emsp;[IServiceManager.Stub#asInterface][StubAsInterfaceLink]  
-&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[IServiceManager.Stub.Proxy#Proxy][ProxyConstructorLink]  
+[asInterfaceLink]:https://cs.android.com/android/platform/superproject/+/master:out/soong/.intermediates/frameworks/base/framework-minus-apex/android_common/xref30/srcjars.xref/android/app/IActivityTaskManager.java;l=719
 
 ```java
-    public static android.os.IServiceManager asInterface(android.os.IBinder obj)
+    /**
+     * Cast an IBinder object into an android.app.IActivityTaskManager interface,
+     * generating a proxy if needed.
+     */
+    public static android.app.IActivityTaskManager asInterface(android.os.IBinder obj)
     {
       if ((obj==null)) {
         return null;
       }
       android.os.IInterface iin = obj.queryLocalInterface(DESCRIPTOR);
-      if (((iin!=null)&&(iin instanceof android.os.IServiceManager))) {
-        return ((android.os.IServiceManager)iin);
+      if (((iin!=null)&&(iin instanceof android.app.IActivityTaskManager))) {
+        return ((android.app.IActivityTaskManager)iin);
       }
-      return new android.os.IServiceManager.Stub.Proxy(obj);
+      return new android.app.IActivityTaskManager.Stub.Proxy(obj);
     }
-    // ... 省略代码
-    private static class Proxy implements android.os.IServiceManager
-    {
-      private android.os.IBinder mRemote;
-      Proxy(android.os.IBinder remote)
-      {
-        mRemote = remote;
-      }
-    // ... 省略代码
+// ... 省略代码
+  public static final java.lang.String DESCRIPTOR = "android.app.IActivityTaskManager";
+// ... 省略代码
 
-// 代码路径：out/soong/.intermediates/frameworks/base/framework-minus-apex/android_common/xref30/srcjars.xref/android/os/IServiceManager.java
+// 代码路径：无，编译过程中生成的
 ```
 
-[BinderAllowBlockingLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/os/Binder.java;l=213
-[SvcMgrNtvAsInterfaceLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/os/ServiceManagerNative.java;l=38
-[ServiceManagerProxyLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/os/ServiceManagerNative.java;l=51
-[StubAsInterfaceLink]:https://cs.android.com/android/platform/superproject/+/master:out/soong/.intermediates/frameworks/base/framework-minus-apex/android_common/xref30/srcjars.xref/android/os/IServiceManager.java;l=122
-[ProxyConstructorLink]:https://cs.android.com/android/platform/superproject/+/master:out/soong/.intermediates/frameworks/base/framework-minus-apex/android_common/xref30/srcjars.xref/android/os/IServiceManager.java;l=335
+下面下两个没有证据支持的断言：  
 
-到此为止，对service manager这一依赖Binder的system service的客户端的封装完成，下面我们来重复以下开头的结论：  
+1. Binder IPC过程中, 同一进程的调用，asInterface()方法返回的是本地Binder对象，不同进程的调用，则返回远程代理对象BinderProxy.  
 
-（1）**android.os.ServiceManager#sServiceManager**是一个**android.os.IServiceManager**，实际类型为**android.os.ServiceManagerProxy**；  
-（2）**android.os.ServiceManagerProxy#mServiceManager**也是一个**android.os.IServiceManager**，实际类型为**android.os.IServiceManager.Stub.Proxy**；  
-（3）**android.os.IServiceManager.Stub.Proxy#mRemote**是一个**android.os.IBinder**，实际类型为**android.os.BinderProxy**；  
-（4）**android.os.BinderProxy#mNativeData**指向的是native类型**android::BinderProxyNativeData**的对象，**android::BinderProxyNativeData::mObject**指向的是**android::BpBinder**的对象；  
-（5）上述此BpBinder对象中的**android::BpBinder::mHandle**成员变量是server manager的Binder实体在Binder驱动中的标识符，值为固定的0；
+2. ServiceManager.getService返回的是指向目标服务的代理对象--BinderProxy对象，由该代理对象可以找到目标服务所在进程
+
+[IActivityTaskManager.Stub.Proxy#startActivity][ProxyStartActivityLink]  
+&emsp;[BinderProxy#transact][BinderProxyTransactLink]  
+&emsp;&emsp;[BinderProxy#transactNative][BinderProxyTransactNativeLink]  
+&emsp;&emsp;&emsp;[getBPNativeData][getBPNativeDataLink]  
+
+[ProxyStartActivityLink]:https://cs.android.com/android/platform/superproject/+/master:out/soong/.intermediates/frameworks/base/framework-minus-apex/android_common/xref30/srcjars.xref/android/app/IActivityTaskManager.java;l=3656
+[BinderProxyTransactLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/os/BinderProxy.java;l=495
+[BinderProxyTransactNativeLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/jni/android_util_Binder.cpp;l=1376
+[getBPNativeDataLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/jni/android_util_Binder.cpp;l=732
+
+```c++
+BinderProxyNativeData* getBPNativeData(JNIEnv* env, jobject obj) {
+    return (BinderProxyNativeData *) env->GetLongField(obj, gBinderProxyOffsets.mNativeData);
+}
+```
+
+再下一个断言：gBinderProxyOffsets.mNativeData中保存的是BpBinder对象, 这是开机时Zygote调用AndroidRuntime::startReg方法来完成jni方法的注册.  
+
+&emsp;&emsp;&emsp;[BpBinder::transact][BpBinderTransactLink]  
+&emsp;&emsp;&emsp;&emsp;[IPCThreadState::transact][IPCThreadStateTransactLink]  
+&emsp;&emsp;&emsp;&emsp;&emsp;[IPCThreadState::waitForResponse][IPCThreadStateWaitForResponseLink]  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[IPCThreadState::talkWithDriver][IPCThreadStateTalkWithDriverLink]  
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;```ioctl(mProcess->mDriverFD, BINDER_WRITE_READ, &bwr)```
+
+[BpBinderTransactLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/libs/binder/BpBinder.cpp;l=213
+[IPCThreadStateTransactLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/libs/binder/IPCThreadState.cpp;l=682
+[IPCThreadStateWaitForResponseLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/libs/binder/IPCThreadState.cpp;l=870
+[IPCThreadStateTalkWithDriverLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/libs/binder/IPCThreadState.cpp;l=965
