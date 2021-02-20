@@ -112,6 +112,22 @@ struct flat_binder_object {
 Parcel类将AMS对应的BBinder对象封装进Binder驱动能读懂的**flat_binder_object**结构中，再将flat_binder_object对象写入Parcel::mData指向的数据包里。  
 而对于整个addService函数而言，所有参数都被封装进了Parcel类型的data对象中。  
 
+```c
+/*
+|----------------------------------------------------------------| <-------- (android.os.Parcel)_data -> mNativePtr -> android::Parcel::mData
+|IServiceManager#DESCRIPTOR("android.os.IServiceManager")        | 
+|----------------------------------------------------------------|
+|Context.ACTIVITY_SERVICE("activity")                            |
+|----------------------------------------------------------------|
+|flat_binder_object(from ActivityManagerService)                 |
+|----------------------------------------------------------------|
+|int(allowIsolated true 1)                                       |
+|----------------------------------------------------------------|
+|int(DUMP_FLAG_PRIORITY_DEFAULT 8)                               |
+|----------------------------------------------------------------|
+*/
+```
+
 ### 2. BpBinder开始transact：第二次封装
 
 &emsp;&emsp;&emsp;&emsp;[BinderProxy#transact][BinderProxytransactLink]  
@@ -169,6 +185,33 @@ status_t IPCThreadState::writeTransactionData(int32_t cmd, uint32_t binderFlags,
 说明：  
 IPCThreadState::mOut：当前线程和Binder驱动通信时输入到Binder驱动中的数据；  
 IPCThreadState::mIn：当前线程和Binder驱动通信时从Binder驱动中读出的数据。  
+
+```c
+/*
+                                             |----------------------------------------| <-------- IPCThreadState::mOut::mData 
+                                             |......                                  |
+                                             |----------------------------------------|
+                                             |binder_transaction_data.target.ptr      |
+                                             |----------------------------------------|
+                                             |binder_transaction_data.target.handle   |
+                                             |----------------------------------------|
+                                             |binder_transaction_data.code            |
+                                             |----------------------------------------|
+                                             |binder_transaction_data.flags           |
+                                             |----------------------------------------|
+|--------------------------------| <-------- |binder_transaction_data.data.ptr.buffer |
+|DESCRIPTOR                      |           |----------------------------------------|
+|--------------------------------|           |......                                  |
+|Context.ACTIVITY_SERVICE        |           |----------------------------------------|
+|--------------------------------|
+|flat_binder_object              |
+|--------------------------------|
+|int(allowIsolated true 1)       |
+|--------------------------------|
+|int(DUMP_FLAG_PRIORITY_DEFAULT 8)|
+|--------------------------------|
+*/
+```
 
 ### 3 开始和驱动通信：对数据第三次封装
 
@@ -279,11 +322,53 @@ status_t IPCThreadState::talkWithDriver(bool doReceive) // Note: doReceive 默�
 ```
 
 [waitForResponseLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/libs/binder/IPCThreadState.cpp;l=870
-[talkWithDriverLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/libs/binder/IPCThreadState.cpp;l=965
+[talkWithDriverLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/libs/binder/IPCThreadState.cpp;l=971
 [IOCTLSystemCallDriverLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/libs/binder/IPCThreadState.cpp;l=1018
 
 在IPCThreadState::talkWithDriver中做了第三次也是最后一次封装，将IPCThreadState::mOut和IPCThreadState::mIn封装到**binder_write_read**结构中；  
 将binder_write_read结构在用户空间的虚拟地址通过ioctl传递到驱动中，数据最终以**binder_write_read**的格式由客户端与驱动交互。  
+
+```c
+/*
+
+                                                                                                        struct binder_write_read
+                                                                                                    |--------------------------------| <-------- &bwr/void __user *ubuf/(void __user *)arg
+                                                                                                    |  binder_size_t write_size;     |
+                                                                                                    |--------------------------------|
+                                                                                                    |  binder_size_t write_consumed; |
+                                                                                                    |--------------------------------|
+                                                                                                ----|  binder_uintptr_t write_buffer;|
+                                                                                                |   |--------------------------------|
+                                                                                                |   |  binder_size_t read_size;      |
+                                                                                                |   |--------------------------------|
+                                                                                                |   |  binder_size_t read_consumed;  |
+                                                                                                |   |--------------------------------|
+                                                                                                |   |  binder_uintptr_t read_buffer; |
+                                                    IPCThreadState::mOut::mData                 |   |--------------------------------|
+                                             |----------------------------------------| <------- 
+                                             |......                                  |
+                                             |----------------------------------------|
+                                             |binder_transaction_data.target.ptr      |
+                                             |----------------------------------------|
+                                             |binder_transaction_data.target.handle   |
+                                             |----------------------------------------|
+                                             |binder_transaction_data.code            |
+                                             |----------------------------------------|
+                                             |binder_transaction_data.flags           |
+            _data                            |----------------------------------------|
+|--------------------------------| <-------- |binder_transaction_data.data.ptr.buffer |
+|DESCRIPTOR                      |           |----------------------------------------|
+|--------------------------------|           |......                                  |
+|Context.ACTIVITY_SERVICE        |           |----------------------------------------|
+|--------------------------------|
+|flat_binder_object              |
+|--------------------------------|
+|int(allowIsolated true 1)       |
+|--------------------------------|
+|int(DUMP_FLAG_PRIORITY_DEFAULT 8)|
+|--------------------------------|
+*/
+```
 
 ### 4. 下面进入驱动执行
 
@@ -797,6 +882,22 @@ status_t IPCThreadState::talkWithDriver(bool doReceive) // Note: doReceive 默�
 [binder_proc_transaction_lk]:https://elixir.bootlin.com/linux/latest/source/drivers/android/binder.c#L2727
 [binder_wakeup_thread_ilocked_lk]:https://elixir.bootlin.com/linux/latest/source/drivers/android/binder.c#L984
 [wake_up_interruptible_lk]:https://elixir.bootlin.com/linux/latest/source/drivers/android/binder.c#L994
+
+### ？？？
+
+通过查看*service manager*进程进入loop的过程可以发现，*service manager*进程通过调用[Looper::pollAll][main_call_pollAll_link]开始监听[binder_fd][addFd_binder_fd_link]，通过查阅代码，这个流程最终会使用[epoll_wait][use_epoll_wait_link]监听。  
+等到有事件到来，则会调用已注册的[callback][call_registered_cb_link]执行对应的任务。根据frameworks/native/cmds/servicemanager/main.cpp中的注册流程，可知此时调用的callback具体为[BinderCallback::handleEvent][the_target_cb_link]。进一步追踪代码流程，可知最终会通过[IPCThreadState::getAndExecuteCommand][getAndExecuteCommandLink]调用[IPCThreadState::talkWithDriver][talkWithDriverLink]，根据前面的代码分析可知，最终会进入驱动的[binder_thread_read][binder_thread_read_lk]执行。  
+现在的问题则是，上一节描述的客户端进程（也就是ActivityServiceManager）在内核态通过函数[binder_wakeup_thread_ilocked][binder_wakeup_thread_ilocked_lk]唤醒了*service manager*进程的binder线程，触发了*service manager*进程的哪一个节点的执行呢？是结束了在[epoll_wait][use_epoll_wait_link]中的等待呢还是结束了在[binder_thread_read][binder_thread_read_lk]的等待然后向下执行的？  
+
+[main_call_pollAll_link]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/cmds/servicemanager/main.cpp;l=137
+[addFd_binder_fd_link]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/cmds/servicemanager/main.cpp;l=48
+[use_epoll_wait_link]:https://cs.android.com/android/platform/superproject/+/master:system/core/libutils/Looper.cpp;l=239
+[call_registered_cb_link]:https://cs.android.com/android/platform/superproject/+/master:system/core/libutils/Looper.cpp;l=355
+[the_target_cb_link]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/cmds/servicemanager/main.cpp;l=58
+[getAndExecuteCommandLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/libs/binder/IPCThreadState.cpp;l=501
+[talkWithDriverLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/libs/binder/IPCThreadState.cpp;l=936
+[binder_thread_read_lk]:https://elixir.bootlin.com/linux/latest/source/drivers/android/binder.c#L3775
+[binder_wakeup_thread_ilocked_lk]:https://elixir.bootlin.com/linux/latest/source/drivers/android/binder.c#L994
 
 ### 5. 唤醒service manager线程之后在service manager的进程中执行
 
