@@ -1,4 +1,4 @@
-# 一、System Service（server端）注册service的过程
+# 一、Binder server端注册service的过程
 
 TODO：驱动中的filp参数？  
 TODO：mIn是不是映射到内核空间，binder驱动管理的地址？  
@@ -17,9 +17,9 @@ TODO: Binder如何避免了两次拷贝？
 [SMPaddServiceLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/os/ServiceManagerNative.java;l=70
 [ISMSPaddServiceLink]:https://cs.android.com/android/platform/superproject/+/master:out/soong/.intermediates/frameworks/base/framework-minus-apex/android_common/xref30/srcjars.xref/android/os/IServiceManager.java;l=414
 
-在第一篇已经分析过ServiceManager的实际组成，这里不在赘述
+在第一篇已经分析过ServiceManager的实际组成，这里不在赘述。
 
-### 1. 第一次封装：Stub类型的system service作为一个参数的加工过程
+### 1. 第一次封装，主要阐述Stub类型的system service作为一个参数的加工过程
 
 &emsp;&emsp;&emsp;&emsp;[Parcel#writeStrongBinder][ParcelwriteStrongBinderLink]（这里IBinder类型的参数，实际类型为ActivityManagerService，父类型为IActivityManager.Stub）  
 &emsp;&emsp;&emsp;&emsp;&emsp;[Parcel#nativeWriteStrongBinder][nativeWriteStrongBinderLink]  
@@ -65,7 +65,9 @@ sp<IBinder> ibinderForJavaObject(JNIEnv* env, jobject obj)
     return NULL;
 }
 // 代码路径：frameworks/base/core/jni/android_util_Binder.cpp
+```
 
+```java
 status_t Parcel::flattenBinder(const sp<IBinder>& binder)
 {
     flat_binder_object obj;
@@ -114,7 +116,7 @@ Parcel类将AMS对应的BBinder对象封装进Binder驱动能读懂的**flat_bin
 
 ```c
 /*
-|----------------------------------------------------------------| <-------- (android.os.Parcel)_data -> mNativePtr -> android::Parcel::mData
+|----------------------------------------------------------------| <-------- android::Parcel::mData <~~ (android::Parcel) mNativePtr <~~ (android.os.Parcel) _data
 |IServiceManager#DESCRIPTOR("android.os.IServiceManager")        | 
 |----------------------------------------------------------------|
 |Context.ACTIVITY_SERVICE("activity")                            |
@@ -128,7 +130,7 @@ Parcel类将AMS对应的BBinder对象封装进Binder驱动能读懂的**flat_bin
 */
 ```
 
-### 2. BpBinder开始transact：第二次封装
+### 2. 第二次封装，BpBinder开始transact
 
 &emsp;&emsp;&emsp;&emsp;[BinderProxy#transact][BinderProxytransactLink]  
 &emsp;&emsp;&emsp;&emsp;&emsp;[**native BinderProxy#transactNative**][BinderProxytransactNativeLink]  
@@ -198,7 +200,7 @@ IPCThreadState::mIn：当前线程和Binder驱动通信时从Binder驱动中读�
                                              |binder_transaction_data.code            |
                                              |----------------------------------------|
                                              |binder_transaction_data.flags           |
-                                             |----------------------------------------|
+            _data                            |----------------------------------------|
 |--------------------------------| <-------- |binder_transaction_data.data.ptr.buffer |
 |DESCRIPTOR                      |           |----------------------------------------|
 |--------------------------------|           |......                                  |
@@ -213,7 +215,7 @@ IPCThreadState::mIn：当前线程和Binder驱动通信时从Binder驱动中读�
 */
 ```
 
-### 3 开始和驱动通信：对数据第三次封装
+### 3 第三次封装，进程和驱动通信
 
 &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[IPCThreadState::waitForResponse][waitForResponseLink]  
 &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[IPCThreadState::talkWithDriver][talkWithDriverLink]  
@@ -398,6 +400,7 @@ status_t IPCThreadState::talkWithDriver(bool doReceive) // Note: doReceive 默�
         thread = binder_get_thread(proc);
         // ... 省略代码
         switch (cmd) {
+// Note: 根据参数cmd的值找到对应的处理函数
         case BINDER_WRITE_READ:
             ret = binder_ioctl_write_read(filp, cmd, arg, thread);
             if (ret)
@@ -436,7 +439,25 @@ status_t IPCThreadState::talkWithDriver(bool doReceive) // Note: doReceive 默�
         void __user *ubuf = (void __user *)arg;
         struct binder_write_read bwr;
         // ... 省略代码
-// Note: 从用户空间ubuf指示的位置，拷贝sizeof(bwr)大小的数据到内核空间&bwr指示的位置，也就是传说中Binder一次拷贝的发生处
+// Note: 从用户空间ubuf指示的位置，拷贝sizeof(bwr)大小的数据到内核空间&bwr指示的位置，也就是传说中Binder一次拷贝的发生处，同时我们需要注意，这次拷贝只是把如下这段内存拷了进来：
+/*
+
+             struct binder_write_read
+        |--------------------------------| <-------- &bwr/void __user *ubuf/(void __user *)arg
+        |  binder_size_t write_size;     |
+        |--------------------------------|
+        |  binder_size_t write_consumed; |
+        |--------------------------------|
+        |  binder_uintptr_t write_buffer;|
+        |--------------------------------|
+        |  binder_size_t read_size;      |
+        |--------------------------------|
+        |  binder_size_t read_consumed;  |
+        |--------------------------------|
+        |  binder_uintptr_t read_buffer; |
+        |--------------------------------|
+*/
+// Note: write_buffer和read_buffer作为指针变量指示的用户空间的内存并没有被拷贝
         if (copy_from_user(&bwr, ubuf, sizeof(bwr))) {
             ret = -EFAULT;
             goto out;
@@ -531,7 +552,20 @@ status_t IPCThreadState::talkWithDriver(bool doReceive) // Note: doReceive 默�
 // Note:    Parcel类型的data封装了addService的入参，data又被封装进binder_transaction_data结构中；
 // Note:    binder_transaction_data结构对象被封装进IPCThreadState::mOut
 // Note:    IPCThreadState::mOut的数据地址被封装进**binder_write_read**中
-// 上一次copy_from_user仅仅把binder_write_read结构对象拷贝进内核空间，但是IPCThreadState::mOut中的真正的数据部分并没有被拷贝
+// Note: 上一次copy_from_user仅仅把binder_write_read结构对象拷贝进内核空间，但是IPCThreadState::mOut中的真正的数据部分并没有被拷贝，本次完成了如下数据的拷贝：
+/*
+    |----------------------------------------|
+    |binder_transaction_data.target.ptr      |
+    |----------------------------------------|
+    |binder_transaction_data.target.handle   |
+    |----------------------------------------|
+    |binder_transaction_data.code            |
+    |----------------------------------------|
+    |binder_transaction_data.flags           |
+    |----------------------------------------|
+    |binder_transaction_data.data.ptr.buffer |
+    |----------------------------------------|
+*/
                 if (copy_from_user(&tr, ptr, sizeof(tr)))
                     return -EFAULT;
                 ptr += sizeof(tr);
@@ -582,7 +616,7 @@ status_t IPCThreadState::talkWithDriver(bool doReceive) // Note: doReceive 默�
 
     static void binder_transaction(struct binder_proc *proc,
                     struct binder_thread *thread,
-                    struct binder_transaction_data *tr, int reply, // Note: reply是上个函数中的cmd == BC_REPLY，所以reply为0
+                    struct binder_transaction_data *tr, int reply, // Note: reply是上个函数中的入参cmd == BC_REPLY，由于cmd实际为BC_TRANSACTION，所以reply为0
                     binder_size_t extra_buffers_size)
     {
         int ret;
@@ -684,7 +718,10 @@ status_t IPCThreadState::talkWithDriver(bool doReceive) // Note: doReceive 默�
         t->flags = tr->flags;
         t->priority = task_nice(current);
         // ... 省略代码
+// Note: ********binder_alloc_new_buf********
 // Note: 从目标进程target_proc中分配内存空间，这一步非常重要，因为下面在目标进程的内核空间中分配的内存，和目标进程启动时调用mmap映射内存是一致的，这也是Binder一次拷贝的具体机制
+// Note: target_proc->alloc 记录着server端进程启动时执行mmap后映射的内存信息，binder_alloc_new_buf函数的作用中映射区域中找到一块合适的内存（用binder_buffer结构表示），用于
+// Note: 客户端实际传过来的参数的拷贝
         t->buffer = binder_alloc_new_buf(&target_proc->alloc, tr->data_size,
             tr->offsets_size, extra_buffers_size,
             !reply && (t->flags & TF_ONE_WAY), current->tgid);
@@ -695,7 +732,20 @@ status_t IPCThreadState::talkWithDriver(bool doReceive) // Note: doReceive 默�
         t->buffer->clear_on_free = !!(t->flags & TF_CLEAR_BUF);
         trace_binder_transaction_alloc_buf(t->buffer);
 // Note: binder_transaction_data.data.ptr.buffer就是名为data的Parcel对象中mData的值(reinterpret_cast<uintptr_t>(mData))，也就是数据的地址
-// Note: binder_transaction_data.data_size则是mData对应的数据的大小(mDataSize > mDataPos ? mDataSize : mDataPos)，单位为size_t
+// Note: binder_transaction_data.data_size则是mData对应的数据的大小(mDataSize > mDataPos ? mDataSize : mDataPos)，单位为size_t，拷贝的具体内容如下：
+/*
+    |----------------------------------|
+    |DESCRIPTOR                        |
+    |----------------------------------|
+    |Context.ACTIVITY_SERVICE          |
+    |----------------------------------|
+
+    |----------------------------------|
+    |int(allowIsolated true 1)         |
+    |----------------------------------|
+    |int(DUMP_FLAG_PRIORITY_DEFAULT 8) |
+    |----------------------------------|
+*/
         if (binder_alloc_copy_user_to_buffer(
                     &target_proc->alloc,
                     t->buffer, 0,
@@ -706,7 +756,20 @@ status_t IPCThreadState::talkWithDriver(bool doReceive) // Note: doReceive 默�
             goto err_copy_data_failed;
         }
 // Note: binder_transaction_data.data.ptr.offsets就是名为data的Parcel对象中所有flat_binder_object对象的起始地址(reinterpret_cast<uintptr_t>(mObjects))
-// Note: binder_transaction_data.offsets_size则是这些flat_binder_object对象总的数据大小(data.ipcObjectsCount()*sizeof(binder_size_t))
+// Note: binder_transaction_data.offsets_size则是这些flat_binder_object对象总的数据大小(data.ipcObjectsCount()*sizeof(binder_size_t))，拷贝的具体内容如下：
+/*
+    |----------------------------------|
+
+    |----------------------------------|
+
+    |----------------------------------|
+    |flat_binder_object                |
+    |----------------------------------|
+
+    |----------------------------------|
+
+    |----------------------------------|
+*/
         if (binder_alloc_copy_user_to_buffer(
                     &target_proc->alloc,
                     t->buffer,
@@ -782,7 +845,136 @@ status_t IPCThreadState::talkWithDriver(bool doReceive) // Note: doReceive 默�
 
 &emsp;&emsp;&emsp;&emsp;[binder_get_node_refs_for_txn][binder_get_node_refs_for_txn_lk]  
 &emsp;&emsp;&emsp;&emsp;[binder_alloc_new_buf][binder_alloc_new_buf_lk]  
+
+```c++
+    struct binder_buffer *binder_alloc_new_buf(struct binder_alloc *alloc,
+                        size_t data_size,
+                        size_t offsets_size,
+                        size_t extra_buffers_size,
+                        int is_async,
+                        int pid)
+    {
+        struct binder_buffer *buffer;
+
+        mutex_lock(&alloc->mutex);
+        buffer = binder_alloc_new_buf_locked(alloc, data_size, offsets_size,
+                            extra_buffers_size, is_async, pid);
+        mutex_unlock(&alloc->mutex);
+        return buffer;
+    }
+```
+
 &emsp;&emsp;&emsp;&emsp;&emsp;[binder_alloc_new_buf_locked][binder_alloc_new_buf_locked_lk]  
+
+```c++
+    static struct binder_buffer *binder_alloc_new_buf_locked(
+                    struct binder_alloc *alloc,
+                    size_t data_size,
+                    size_t offsets_size,
+                    size_t extra_buffers_size,
+                    int is_async,
+                    int pid)
+    {
+// Note: 注意！！！n来自目标进程的binder_alloc中保存的free_buffers
+        struct rb_node *n = alloc->free_buffers.rb_node;
+        struct binder_buffer *buffer;
+        size_t buffer_size;
+        struct rb_node *best_fit = NULL;
+        void __user *has_page_addr;
+        void __user *end_page_addr;
+        size_t size, data_offsets_size;
+        int ret;
+
+        // ... 省略错误处理的代码
+
+        data_offsets_size = ALIGN(data_size, sizeof(void *)) +
+            ALIGN(offsets_size, sizeof(void *));
+
+        // ... 省略错误处理的代码
+        size = data_offsets_size + ALIGN(extra_buffers_size, sizeof(void *));
+        // ... 省略错误处理的代码
+
+        /* Pad 0-size buffers so they get assigned unique addresses */
+        size = max(size, sizeof(void *));
+// Note: 在目标进程中找到一块合适的binder_buffer
+        while (n) {
+            buffer = rb_entry(n, struct binder_buffer, rb_node);
+            BUG_ON(!buffer->free);
+            buffer_size = binder_alloc_buffer_size(alloc, buffer);
+
+            if (size < buffer_size) {
+                best_fit = n;
+                n = n->rb_left;
+            } else if (size > buffer_size)
+                n = n->rb_right;
+            else {
+                best_fit = n;
+                break;
+            }
+        }
+        // ... 省略边界条件处理的代码
+
+        // ... 省略代码
+
+        has_page_addr = (void __user *)
+            (((uintptr_t)buffer->user_data + buffer_size) & PAGE_MASK);
+        WARN_ON(n && buffer_size != size);
+        end_page_addr =
+            (void __user *)PAGE_ALIGN((uintptr_t)buffer->user_data + size);
+        if (end_page_addr > has_page_addr)
+            end_page_addr = has_page_addr;
+        ret = binder_update_page_range(alloc, 1, (void __user *)
+            PAGE_ALIGN((uintptr_t)buffer->user_data), end_page_addr);
+        if (ret)
+            return ERR_PTR(ret);
+
+        if (buffer_size != size) {
+            struct binder_buffer *new_buffer;
+
+            new_buffer = kzalloc(sizeof(*buffer), GFP_KERNEL);
+            if (!new_buffer) {
+                pr_err("%s: %d failed to alloc new buffer struct\n",
+                    __func__, alloc->pid);
+                goto err_alloc_buf_struct_failed;
+            }
+            new_buffer->user_data = (u8 __user *)buffer->user_data + size;
+            list_add(&new_buffer->entry, &buffer->entry);
+            new_buffer->free = 1;
+            binder_insert_free_buffer(alloc, new_buffer);
+        }
+// Note: 对找到的buffer进行初始化
+        rb_erase(best_fit, &alloc->free_buffers);
+        buffer->free = 0;
+        buffer->allow_user_free = 0;
+        binder_insert_allocated_buffer_locked(alloc, buffer);
+        binder_alloc_debug(BINDER_DEBUG_BUFFER_ALLOC,
+                "%d: binder_alloc_buf size %zd got %pK\n",
+                alloc->pid, size, buffer);
+        buffer->data_size = data_size;
+        buffer->offsets_size = offsets_size;
+        buffer->async_transaction = is_async;
+        buffer->extra_buffers_size = extra_buffers_size;
+        buffer->pid = pid;
+        if (is_async) {
+            alloc->free_async_space -= size + sizeof(struct binder_buffer);
+            binder_alloc_debug(BINDER_DEBUG_BUFFER_ALLOC_ASYNC,
+                    "%d: binder_alloc_buf size %zd async free %zd\n",
+                    alloc->pid, size, alloc->free_async_space);
+            if (alloc->free_async_space < alloc->buffer_size / 10) {
+                /*
+                * Start detecting spammers once we have less than 20%
+                * of async space left (which is less than 10% of total
+                * buffer size).
+                */
+                debug_low_async_space_locked(alloc, pid);
+            }
+        }
+        return buffer;
+
+    // ... 省略错误处理的代码
+    }
+```
+
 &emsp;&emsp;&emsp;&emsp;[binder_alloc_copy_user_to_buffer][binder_alloc_copy_user_to_buffer_lk]  
 
 ```c++
@@ -883,7 +1075,7 @@ status_t IPCThreadState::talkWithDriver(bool doReceive) // Note: doReceive 默�
 [binder_wakeup_thread_ilocked_lk]:https://elixir.bootlin.com/linux/latest/source/drivers/android/binder.c#L984
 [wake_up_interruptible_lk]:https://elixir.bootlin.com/linux/latest/source/drivers/android/binder.c#L994
 
-### ？？？
+### 进入service manager进程前的一些问题
 
 通过查看*service manager*进程进入loop的过程可以发现，*service manager*进程通过调用[Looper::pollAll][main_call_pollAll_link]开始监听[binder_fd][addFd_binder_fd_link]，通过查阅代码，这个流程最终会使用[epoll_wait][use_epoll_wait_link]监听。  
 等到有事件到来，则会调用已注册的[callback][call_registered_cb_link]执行对应的任务。根据frameworks/native/cmds/servicemanager/main.cpp中的注册流程，可知此时调用的callback具体为[BinderCallback::handleEvent][the_target_cb_link]。进一步追踪代码流程，可知最终会通过[IPCThreadState::getAndExecuteCommand][getAndExecuteCommandLink]调用[IPCThreadState::talkWithDriver][talkWithDriverLink]，根据前面的代码分析可知，最终会进入驱动的[binder_thread_read][binder_thread_read_lk]执行。  
@@ -895,49 +1087,69 @@ status_t IPCThreadState::talkWithDriver(bool doReceive) // Note: doReceive 默�
 [call_registered_cb_link]:https://cs.android.com/android/platform/superproject/+/master:system/core/libutils/Looper.cpp;l=355
 [the_target_cb_link]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/cmds/servicemanager/main.cpp;l=58
 [getAndExecuteCommandLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/libs/binder/IPCThreadState.cpp;l=501
-[talkWithDriverLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/libs/binder/IPCThreadState.cpp;l=936
+[talkWithDriverLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/libs/binder/IPCThreadState.cpp;l=971
 [binder_thread_read_lk]:https://elixir.bootlin.com/linux/latest/source/drivers/android/binder.c#L3775
 [binder_wakeup_thread_ilocked_lk]:https://elixir.bootlin.com/linux/latest/source/drivers/android/binder.c#L994
 
-### 5. 唤醒service manager线程之后在service manager的进程中执行
+### 6. 在service manager进程的内核态执行
 
-从第四篇我们可以知道，service manger进程中的Looper线程监听了binder驱动对应的设备文件节点。现在，上一小节已经写入了事件，接下来service manager进程被唤醒，开始调用被监听的binder驱动对应的设备文件节点对应的LooperCallback对象的BinderCallback::handleEvent函数：  
+不管上一小节的问题答案最终是什么，我们知道service manager进程总是该从*binder_thread_read*函数开始： 
 
-[BinderCallback::handleEvent][BinderCallbackHandleEventLink]  
-[IPCThreadState::handlePolledCommands][IPCTSHandlePolledCommandsLink]  
-[IPCThreadState::getAndExecuteCommand][IPCTSgetAndExecuteCommandLink]  
-[IPCThreadState::executeCommand][IPCTSexecuteCommandLink]  
-[BBinder::transact][BBinderTransactLink]  
-[BnServiceManager::onTransact][BnServiceManagerOnTransactLink]  
-[ServiceManager::addService][ServiceManagerAddServiceLink]  
+[binder_ioctl_write_read][binder_ioctl_write_read_lk]  
 
 ```c++
-Status ServiceManager::addService(const std::string& name, const sp<IBinder>& binder, bool allowIsolated, int32_t dumpPriority) {
-    auto ctx = mAccess->getCallingContext();
-// ... 省略代码
+    static int binder_ioctl_write_read(struct file *filp,
+                    unsigned int cmd, unsigned long arg,
+                    struct binder_thread *thread)
+    {
+        int ret = 0;
+        struct binder_proc *proc = filp->private_data;
+        unsigned int size = _IOC_SIZE(cmd);
+        void __user *ubuf = (void __user *)arg;
+        struct binder_write_read bwr; // ... 省略代码
 
-    // Overwrite the old service if it exists
-    mNameToService[name] = Service {
-        .binder = binder,
-        .allowIsolated = allowIsolated,
-        .dumpPriority = dumpPriority,
-        .debugPid = ctx.debugPid,
-    };
+// Note: 仍旧是上面提到过得第一次拷贝，如下结构拷贝如内核空间
+/*
+                   struct binder_write_read
+&bwr --------> |--------------------------------|
+               |  binder_size_t write_size;     |
+               |--------------------------------|
+               |  binder_size_t write_consumed; |
+               |--------------------------------|
+               |  binder_uintptr_t write_buffer;|
+               |--------------------------------|
+               |  binder_size_t read_size;      |
+               |--------------------------------|
+               |  binder_size_t read_consumed;  |
+               |--------------------------------|
+               |  binder_uintptr_t read_buffer; |
+               |--------------------------------|
+*/
+        if (copy_from_user(&bwr, ubuf, sizeof(bwr))) {
+            ret = -EFAULT;
+            goto out;
+        }
+        // ... 省略错误处理代码
 
-// ... 省略代码
-    return Status::ok();
-}
+        if (bwr.write_size > 0) {
+            // ... 省略代码
+        }
+        if (bwr.read_size > 0) {
+            ret = binder_thread_read(proc, thread, bwr.read_buffer,
+                        bwr.read_size,
+                        &bwr.read_consumed,
+                        filp->f_flags & O_NONBLOCK);
+            // ... 省略代码
+        }
+        // ... 省略错误处理代码
+        if (copy_to_user(ubuf, &bwr, sizeof(bwr))) {
+            ret = -EFAULT;
+            goto out;
+        }
+    out:
+        return ret;
+    }
 ```
-
-[BinderCallbackHandleEventLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/cmds/servicemanager/main.cpp;l=58
-[IPCTSHandlePolledCommandsLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/libs/binder/IPCThreadState.cpp;l=670
-[IPCTSgetAndExecuteCommandLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/libs/binder/IPCThreadState.cpp;l=516
-[IPCTSexecuteCommandLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/libs/binder/IPCThreadState.cpp;l=1274
-[BBinderTransactLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/libs/binder/Binder.cpp;l=172
-[BnServiceManagerOnTransactLink]:https://cs.android.com/android/platform/superproject/+/master:out/soong/.intermediates/frameworks/native/libs/binder/libbinder_aidl_test_stub-cpp-source/gen/android/os/IServiceManager.cpp;l=501
-[ServiceManagerAddServiceLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/cmds/servicemanager/ServiceManager.cpp;l=248
-
-### 6. 下面回到驱动看看AMS线程中发生了什么
 
 &emsp;&emsp;[binder_thread_read][binder_thread_read_lk]  
 
@@ -1023,173 +1235,20 @@ Status ServiceManager::addService(const std::string& name, const sp<IBinder>& bi
                 binder_inner_proc_unlock(proc);
                 t = container_of(w, struct binder_transaction, work);
             } break;
-            case BINDER_WORK_RETURN_ERROR: {
-                struct binder_error *e = container_of(
-                        w, struct binder_error, work);
-
-                WARN_ON(e->cmd == BR_OK);
-                binder_inner_proc_unlock(proc);
-                if (put_user(e->cmd, (uint32_t __user *)ptr))
-                    return -EFAULT;
-                cmd = e->cmd;
-                e->cmd = BR_OK;
-                ptr += sizeof(uint32_t);
-
-                binder_stat_br(proc, thread, cmd);
-            } break;
-            case BINDER_WORK_TRANSACTION_COMPLETE: {
-                binder_inner_proc_unlock(proc);
-                cmd = BR_TRANSACTION_COMPLETE;
-                kfree(w);
-                binder_stats_deleted(BINDER_STAT_TRANSACTION_COMPLETE);
-                if (put_user(cmd, (uint32_t __user *)ptr))
-                    return -EFAULT;
-                ptr += sizeof(uint32_t);
-
-                binder_stat_br(proc, thread, cmd);
-                binder_debug(BINDER_DEBUG_TRANSACTION_COMPLETE,
-                        "%d:%d BR_TRANSACTION_COMPLETE\n",
-                        proc->pid, thread->pid);
-            } break;
-            case BINDER_WORK_NODE: {
-                struct binder_node *node = container_of(w, struct binder_node, work);
-                int strong, weak;
-                binder_uintptr_t node_ptr = node->ptr;
-                binder_uintptr_t node_cookie = node->cookie;
-                int node_debug_id = node->debug_id;
-                int has_weak_ref;
-                int has_strong_ref;
-                void __user *orig_ptr = ptr;
-
-                BUG_ON(proc != node->proc);
-                strong = node->internal_strong_refs ||
-                        node->local_strong_refs;
-                weak = !hlist_empty(&node->refs) ||
-                        node->local_weak_refs ||
-                        node->tmp_refs || strong;
-                has_strong_ref = node->has_strong_ref;
-                has_weak_ref = node->has_weak_ref;
-
-                if (weak && !has_weak_ref) {
-                    node->has_weak_ref = 1;
-                    node->pending_weak_ref = 1;
-                    node->local_weak_refs++;
-                }
-                if (strong && !has_strong_ref) {
-                    node->has_strong_ref = 1;
-                    node->pending_strong_ref = 1;
-                    node->local_strong_refs++;
-                }
-                if (!strong && has_strong_ref)
-                    node->has_strong_ref = 0;
-                if (!weak && has_weak_ref)
-                    node->has_weak_ref = 0;
-                if (!weak && !strong) {
-                    binder_debug(BINDER_DEBUG_INTERNAL_REFS,
-                            "%d:%d node %d u%016llx c%016llx deleted\n",
-                            proc->pid, thread->pid,
-                            node_debug_id,
-                            (u64)node_ptr,
-                            (u64)node_cookie);
-                    rb_erase(&node->rb_node, &proc->nodes);
-                    binder_inner_proc_unlock(proc);
-                    binder_node_lock(node);
-                    /*
-                    * Acquire the node lock before freeing the
-                    * node to serialize with other threads that
-                    * may have been holding the node lock while
-                    * decrementing this node (avoids race where
-                    * this thread frees while the other thread
-                    * is unlocking the node after the final
-                    * decrement)
-                    */
-                    binder_node_unlock(node);
-                    binder_free_node(node);
-                } else
-                    binder_inner_proc_unlock(proc);
-
-                if (weak && !has_weak_ref)
-                    ret = binder_put_node_cmd(
-                            proc, thread, &ptr, node_ptr,
-                            node_cookie, node_debug_id,
-                            BR_INCREFS, "BR_INCREFS");
-                if (!ret && strong && !has_strong_ref)
-                    ret = binder_put_node_cmd(
-                            proc, thread, &ptr, node_ptr,
-                            node_cookie, node_debug_id,
-                            BR_ACQUIRE, "BR_ACQUIRE");
-                if (!ret && !strong && has_strong_ref)
-                    ret = binder_put_node_cmd(
-                            proc, thread, &ptr, node_ptr,
-                            node_cookie, node_debug_id,
-                            BR_RELEASE, "BR_RELEASE");
-                if (!ret && !weak && has_weak_ref)
-                    ret = binder_put_node_cmd(
-                            proc, thread, &ptr, node_ptr,
-                            node_cookie, node_debug_id,
-                            BR_DECREFS, "BR_DECREFS");
-                if (orig_ptr == ptr)
-                    binder_debug(BINDER_DEBUG_INTERNAL_REFS,
-                            "%d:%d node %d u%016llx c%016llx state unchanged\n",
-                            proc->pid, thread->pid,
-                            node_debug_id,
-                            (u64)node_ptr,
-                            (u64)node_cookie);
-                if (ret)
-                    return ret;
-            } break;
+            case BINDER_WORK_RETURN_ERROR: // ... 省略代码
+            case BINDER_WORK_TRANSACTION_COMPLETE: // ... 省略代码
+            case BINDER_WORK_NODE: // ... 省略代码
             case BINDER_WORK_DEAD_BINDER:
             case BINDER_WORK_DEAD_BINDER_AND_CLEAR:
-            case BINDER_WORK_CLEAR_DEATH_NOTIFICATION: {
-                struct binder_ref_death *death;
-                uint32_t cmd;
-                binder_uintptr_t cookie;
-
-                death = container_of(w, struct binder_ref_death, work);
-                if (w->type == BINDER_WORK_CLEAR_DEATH_NOTIFICATION)
-                    cmd = BR_CLEAR_DEATH_NOTIFICATION_DONE;
-                else
-                    cmd = BR_DEAD_BINDER;
-                cookie = death->cookie;
-
-                binder_debug(BINDER_DEBUG_DEATH_NOTIFICATION,
-                        "%d:%d %s %016llx\n",
-                        proc->pid, thread->pid,
-                        cmd == BR_DEAD_BINDER ?
-                        "BR_DEAD_BINDER" :
-                        "BR_CLEAR_DEATH_NOTIFICATION_DONE",
-                        (u64)cookie);
-                if (w->type == BINDER_WORK_CLEAR_DEATH_NOTIFICATION) {
-                    binder_inner_proc_unlock(proc);
-                    kfree(death);
-                    binder_stats_deleted(BINDER_STAT_DEATH);
-                } else {
-                    binder_enqueue_work_ilocked(
-                            w, &proc->delivered_death);
-                    binder_inner_proc_unlock(proc);
-                }
-                if (put_user(cmd, (uint32_t __user *)ptr))
-                    return -EFAULT;
-                ptr += sizeof(uint32_t);
-                if (put_user(cookie,
-                        (binder_uintptr_t __user *)ptr))
-                    return -EFAULT;
-                ptr += sizeof(binder_uintptr_t);
-                binder_stat_br(proc, thread, cmd);
-                if (cmd == BR_DEAD_BINDER)
-                    goto done; /* DEAD_BINDER notifications can cause transactions */
-            } break;
-            default:
-                binder_inner_proc_unlock(proc);
-                pr_err("%d:%d: bad work type %d\n",
-                    proc->pid, thread->pid, w->type);
-                break;
+            case BINDER_WORK_CLEAR_DEATH_NOTIFICATION: // ... 省略代码
+            default: // ... 省略代码
             }
 
             if (!t)
                 continue;
 
-            BUG_ON(t->buffer == NULL);
+            // ... 省略错误处理的代码
+// Note: !!!!!!
             if (t->buffer->target_node) {
                 struct binder_node *target_node = t->buffer->target_node;
 
@@ -1273,6 +1332,10 @@ Status ServiceManager::addService(const std::string& name, const sp<IBinder>& bi
                 return -EFAULT;
             }
             ptr += sizeof(uint32_t);
+// Note: unsigned long copy_to_user(void __user *to, const void *from, unsigned long n)：
+// Note:    to 用户空间的指针
+// Note:    from 内核空间的指针
+// Note:    n 是内核空间向用户空间拷贝的字节数
             if (copy_to_user(ptr, &tr, trsize)) {
                 if (t_from)
                     binder_thread_dec_tmpref(t_from);
@@ -1398,9 +1461,50 @@ Status ServiceManager::addService(const std::string& name, const sp<IBinder>& bi
 // 代码路径：/drivers/android/binder.c
 ```
 
+[binder_ioctl_write_read_lk]:https://elixir.bootlin.com/linux/latest/source/drivers/android/binder.c#L3775
 [binder_thread_read_lk]:https://elixir.bootlin.com/linux/latest/source/drivers/android/binder.c#L4162
 [binder_available_for_proc_work_lk]:https://elixir.bootlin.com/linux/latest/source/drivers/android/binder.c#L508
 [binder_wait_for_work_lk]:https://elixir.bootlin.com/linux/latest/source/drivers/android/binder.c#L3678
+
+### 7. 唤醒service manager线程之后在service manager的进程中执行
+
+从第四篇我们可以知道，service manger进程中的Looper线程监听了binder驱动对应的设备文件节点。现在，上一小节已经写入了事件，接下来service manager进程被唤醒，开始调用被监听的binder驱动对应的设备文件节点对应的LooperCallback对象的BinderCallback::handleEvent函数：  
+
+[BinderCallback::handleEvent][BinderCallbackHandleEventLink]  
+[IPCThreadState::handlePolledCommands][IPCTSHandlePolledCommandsLink]  
+[IPCThreadState::getAndExecuteCommand][IPCTSgetAndExecuteCommandLink]  
+[IPCThreadState::executeCommand][IPCTSexecuteCommandLink]  
+[BBinder::transact][BBinderTransactLink]  
+[BnServiceManager::onTransact][BnServiceManagerOnTransactLink]  
+[ServiceManager::addService][ServiceManagerAddServiceLink]  
+
+```c++
+Status ServiceManager::addService(const std::string& name, const sp<IBinder>& binder, bool allowIsolated, int32_t dumpPriority) {
+    auto ctx = mAccess->getCallingContext();
+// ... 省略代码
+
+    // Overwrite the old service if it exists
+    mNameToService[name] = Service {
+        .binder = binder,
+        .allowIsolated = allowIsolated,
+        .dumpPriority = dumpPriority,
+        .debugPid = ctx.debugPid,
+    };
+
+// ... 省略代码
+    return Status::ok();
+}
+```
+
+[BinderCallbackHandleEventLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/cmds/servicemanager/main.cpp;l=58
+[IPCTSHandlePolledCommandsLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/libs/binder/IPCThreadState.cpp;l=670
+[IPCTSgetAndExecuteCommandLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/libs/binder/IPCThreadState.cpp;l=516
+[IPCTSexecuteCommandLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/libs/binder/IPCThreadState.cpp;l=1274
+[BBinderTransactLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/libs/binder/Binder.cpp;l=172
+[BnServiceManagerOnTransactLink]:https://cs.android.com/android/platform/superproject/+/master:out/soong/.intermediates/frameworks/native/libs/binder/libbinder_aidl_test_stub-cpp-source/gen/android/os/IServiceManager.cpp;l=501
+[ServiceManagerAddServiceLink]:https://cs.android.com/android/platform/superproject/+/master:frameworks/native/cmds/servicemanager/ServiceManager.cpp;l=248
+
+### 8. 下面回到驱动看看AMS线程中发生了什么
 
 ## 附
 
