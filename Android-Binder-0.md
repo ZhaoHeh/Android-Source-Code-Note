@@ -38,9 +38,15 @@
 /frameworks/native/cmds/servicemanager/ServiceManager.cpp  
 
 ### **binder driver**
+<<<<<<< HEAD
 
 Binder驱动不属于AOSP，但在厂商源码的kernel路径下一定会找到，最新的Linux源码也已经合入，网上也可以很方便地搜到，这里就不给出其在Android源码中的路径了  
 
+=======
+
+Binder驱动不属于AOSP，但在厂商源码的kernel路径下一定会找到，最新的Linux源码也已经合入，网上也可以很方便地搜到，这里就不给出其在Android源码中的路径了  
+
+>>>>>>> fe015c8ec1e0692740bc5594f319a19398f3819a
 例：  
 [drivers/android/binder.c](https://elixir.bootlin.com/linux/latest/source/drivers/android/binder.c)  
 [include/uapi/linux/android/binder.h](https://elixir.bootlin.com/linux/latest/source/include/uapi/linux/android/binder.h)  
