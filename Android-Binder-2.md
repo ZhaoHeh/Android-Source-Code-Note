@@ -1,9 +1,7 @@
 # 一、Binder server端注册service的过程
 
 TODO：驱动中的filp参数？  
-TODO：mIn是不是映射到内核空间，binder驱动管理的地址？  
 TODO: IPCThreadState::mIn empty与否是由谁决定的？  
-TODO: Binder如何避免了两次拷贝？  
 
 ## AMS（ActivityManagerService）注册过程分析
 
@@ -166,7 +164,7 @@ status_t IPCThreadState::writeTransactionData(int32_t cmd, uint32_t binderFlags,
     tr.target.handle = handle;
     tr.code = code;
     tr.flags = binderFlags;
-// ... 省略代码
+    // ... 省略代码
     const status_t err = data.errorCheck();
     if (err == NO_ERROR) {
         tr.data_size = data.ipcDataSize();
@@ -174,8 +172,9 @@ status_t IPCThreadState::writeTransactionData(int32_t cmd, uint32_t binderFlags,
         tr.offsets_size = data.ipcObjectsCount()*sizeof(binder_size_t);
         tr.data.ptr.offsets = data.ipcObjects();
     }
-// ... 省略代码
-    mOut.writeInt32(cmd); // cmd的实际值为BC_TRANSACTION
+    // ... 省略代码
+// Note: cmd的实际值为 BC_TRANSACTION
+    mOut.writeInt32(cmd);
     mOut.write(&tr, sizeof(tr));
 
     return NO_ERROR;
@@ -191,17 +190,17 @@ IPCThreadState::mIn：当前线程和Binder驱动通信时从Binder驱动中读�
 ```c
 /*
                                              |----------------------------------------| <-------- IPCThreadState::mOut::mData 
-                                             |......                                  |
+                                             | BC_TRANSACTION                         |
+                                             |----------------------------------------| struct  binder_transaction_data
+                                             | tr.target.ptr                          |
                                              |----------------------------------------|
-                                             |binder_transaction_data.target.ptr      |
+                                             | tr.target.handle                       |
                                              |----------------------------------------|
-                                             |binder_transaction_data.target.handle   |
+                                             | tr.code                                |
                                              |----------------------------------------|
-                                             |binder_transaction_data.code            |
-                                             |----------------------------------------|
-                                             |binder_transaction_data.flags           |
+                                             | tr.flags                               |
             _data                            |----------------------------------------|
-|--------------------------------| <-------- |binder_transaction_data.data.ptr.buffer |
+|--------------------------------| <-------- | tr.data.ptr.buffer                     |
 |DESCRIPTOR                      |           |----------------------------------------|
 |--------------------------------|           |......                                  |
 |Context.ACTIVITY_SERVICE        |           |----------------------------------------|
@@ -345,25 +344,25 @@ status_t IPCThreadState::talkWithDriver(bool doReceive) // Note: doReceive 默�
                                                                                                 |   |--------------------------------|
                                                                                                 |   |  binder_size_t read_consumed;  |
                                                                                                 |   |--------------------------------|
-                                                                                                |   |  binder_uintptr_t read_buffer; |
-                                                    IPCThreadState::mOut::mData                 |   |--------------------------------|
-                                             |----------------------------------------| <------- 
-                                             |......                                  |
-                                             |----------------------------------------|
-                                             |binder_transaction_data.target.ptr      |
-                                             |----------------------------------------|
-                                             |binder_transaction_data.target.handle   |
-                                             |----------------------------------------|
-                                             |binder_transaction_data.code            |
-                                             |----------------------------------------|
-                                             |binder_transaction_data.flags           |
-            _data                            |----------------------------------------|
-|--------------------------------| <-------- |binder_transaction_data.data.ptr.buffer |
-|DESCRIPTOR                      |           |----------------------------------------|
-|--------------------------------|           |......                                  |
-|Context.ACTIVITY_SERVICE        |           |----------------------------------------|
-|--------------------------------|
-|flat_binder_object              |
+                                                                                                | --|  binder_uintptr_t read_buffer; |
+                                                    IPCThreadState::mOut::mData                 | | |--------------------------------|
+                                             |----------------------------------------| <-------  |
+                                             |......                                  |           |
+                                             |----------------------------------------|           |
+                                             |binder_transaction_data.target.ptr      |           |
+                                             |----------------------------------------|           |
+                                             |binder_transaction_data.target.handle   |           |
+                                             |----------------------------------------|           |
+                                             |binder_transaction_data.code            |           |
+                                             |----------------------------------------|           |
+                                             |binder_transaction_data.flags           |           |
+            _data                            |----------------------------------------|           |
+|--------------------------------| <-------- |binder_transaction_data.data.ptr.buffer |           |
+|DESCRIPTOR                      |           |----------------------------------------|           |
+|--------------------------------|           |......                                  |           |
+|Context.ACTIVITY_SERVICE        |           |----------------------------------------|           |
+|--------------------------------|                                                                |
+|flat_binder_object              |                                                 null <---------|
 |--------------------------------|
 |int(allowIsolated true 1)       |
 |--------------------------------|
@@ -377,25 +376,24 @@ status_t IPCThreadState::talkWithDriver(bool doReceive) // Note: doReceive 默�
 [binder_ioctl][binder_ioctl_lk]  
 
 ```c++
-    static long binder_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 // Note: 参数说明
-// Note: filp   文件指针？？？？？？
+// Note: filp   文件指针，Linux系统调用通过struct file实现驱动函数的映射？？？？？？
 // Note: cmd    BINDER_WRITE_READ
 // Note: arg    用户空间中binder_write_read结构对象的地址
+    static long binder_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
     {
         int ret;
 // Note: 获得该进程在Binder驱动中对应的结构体
         struct binder_proc *proc = filp->private_data;
         struct binder_thread *thread;
         unsigned int size = _IOC_SIZE(cmd);
-// Note: ubuf是一个指针变量，值等于unsigned long类型的arg，arg就是ioctl(mProcess->mDriverFD, BINDER_WRITE_READ, &bwr)中的&bwr，也就是用户空间bwr结构的指针，所以ubuf的值就等于bwr结构在用户空间的虚拟地址。
+// Note: ubuf是一个指针变量，值等于unsigned long类型的arg，arg就是用户空间bwr结构的指针，所以ubuf的值就等于bwr结构在用户空间的虚拟地址。
         void __user *ubuf = (void __user *)arg;
         // ... 省略代码
-// Note: wait_event_interruptible 当 binder_stop_on_user_error >= 2时，会令当前线程进入休眠状态(wait_event_interruptible的具体原理参考第六篇)
-// Note: binder_stop_on_user_error 的值的修改应该和binder module在内核的加载有关，因此此处的 wait_event_interruptible 应该是一种错误处理，不必太关注
+        // Note: wait_event_interruptible 当 binder_stop_on_user_error >= 2时，会令当前线程进入休眠状态(wait_event_interruptible的具体原理参考第六篇)
+        // Note: binder_stop_on_user_error 的值的修改应该和binder module在内核的加载有关，因此此处的 wait_event_interruptible 应该是一种错误处理，不必太关注
         ret = wait_event_interruptible(binder_user_error_wait, binder_stop_on_user_error < 2);
-        if (ret)
-            goto err_unlocked;
+        // ... 省略代码
 // Note: 查找或创建当前线程对应的**struct binder_thread**结构
         thread = binder_get_thread(proc);
         // ... 省略代码
@@ -418,12 +416,11 @@ status_t IPCThreadState::talkWithDriver(bool doReceive) // Note: doReceive 默�
             goto err;
         }
         ret = 0;
-    err:
-        // ... 省略代码
-    err_unlocked:
         // ... 省略代码
         return ret;
     }
+// 总结：binder_ioctl函数仅仅对传递过来的参数进行简单的处理，获取到一些关键信息：
+//          client端在binder驱动中对应的“进程结构体”、“线程结构体”、命令以及struct binder_write_read数据包在用户空间的地址
 ```
 
 &emsp;[binder_ioctl_write_read][binder_ioctl_write_read_lk]  
@@ -437,13 +434,15 @@ status_t IPCThreadState::talkWithDriver(bool doReceive) // Note: doReceive 默�
         struct binder_proc *proc = filp->private_data;
         unsigned int size = _IOC_SIZE(cmd);
         void __user *ubuf = (void __user *)arg;
+// Note: 在内核空间binder_ioctl_write_read函数的栈中开辟一个临时内存，大小为sizeof(struct binder_write_read)，用&bwr指示
         struct binder_write_read bwr;
         // ... 省略代码
+        if (copy_from_user(&bwr, ubuf, sizeof(bwr))) {
 // Note: 从用户空间ubuf指示的位置，拷贝sizeof(bwr)大小的数据到内核空间&bwr指示的位置，也就是传说中Binder一次拷贝的发生处，同时我们需要注意，这次拷贝只是把如下这段内存拷了进来：
+// Note: write_buffer和read_buffer作为指针变量指示的用户空间的内存并没有被拷贝
 /*
-
              struct binder_write_read
-        |--------------------------------| <-------- &bwr/void __user *ubuf/(void __user *)arg
+        |--------------------------------| <-------- &bwr（内核空间）
         |  binder_size_t write_size;     |
         |--------------------------------|
         |  binder_size_t write_consumed; |
@@ -457,47 +456,49 @@ status_t IPCThreadState::talkWithDriver(bool doReceive) // Note: doReceive 默�
         |  binder_uintptr_t read_buffer; |
         |--------------------------------|
 */
-// Note: write_buffer和read_buffer作为指针变量指示的用户空间的内存并没有被拷贝
-        if (copy_from_user(&bwr, ubuf, sizeof(bwr))) {
-            ret = -EFAULT;
-            goto out;
+            // ... 省略错误处理代码
         }
         // ... 省略代码
         if (bwr.write_size > 0) {
-            ret = binder_thread_write(proc, thread,
-// Note: bwr.write_buffer 对应的就是 IPCThreadState::mOut 的数据地址，也就是 Parcel::mData 指针变量所指的地址
+// Note: bwr.write_buffer 对应的就是 IPCThreadState::mOut 的数据地址，也就是 IPCThreadState::mOut::mData 指针变量所指的地址
 // Note: bwr.write_size 就是 IPCThreadState::mOut 中数据的大小
+// Note: bwr.write_consumed 就是在用户空间talkWithDriver中设置为0的，标志已经write的数据量的大小的变量
+            ret = binder_thread_write(proc, thread,
                         bwr.write_buffer,
                         bwr.write_size,
                         &bwr.write_consumed);
-            // ... 省略代码
+            // ... 省略错误处理代码
         }
         if (bwr.read_size > 0) {
-// Note: bwr.read_buffer 对应的就是 IPCThreadState::mIn 的数据地址，也就是 Parcel::mData 指针变量所指的地址
+// Note: bwr.read_buffer 对应的就是 IPCThreadState::mIn 的数据地址，也就是 IPCThreadState::mIn::mData 指针变量所指的地址
 // Note: bwr.read_size 则是 IPCThreadState::mIn 中数据的大小
 // Note: bwr.read_consumed 初始值会被设为0，然后在驱动中被修改
-// Note: filp->f_flags & O_NONBLOCK ??? filp 是什么时候分配的地址? filp->f_flags 是什么时候赋值的?
+// Note: filp->f_flags包括O_RDONLY, O_NONBLOCK, and O_SYNC三个flag，通常驱动里面需要检查O_NONBLOCK，判断是否为不可阻塞的操作，可以不用关注
             ret = binder_thread_read(proc, thread, bwr.read_buffer,
                         bwr.read_size,
                         &bwr.read_consumed,
                         filp->f_flags & O_NONBLOCK);
-            trace_binder_read_done(ret);
-            binder_inner_proc_lock(proc);
-            if (!binder_worklist_empty_ilocked(&proc->todo))
-                binder_wakeup_proc_ilocked(proc);
-            binder_inner_proc_unlock(proc);
-            if (ret < 0) {
-                if (copy_to_user(ubuf, &bwr, sizeof(bwr)))
-                    ret = -EFAULT;
-                goto out;
-            }
+            // ... 省略错误处理代码
         }
-        binder_debug(BINDER_DEBUG_READ_WRITE,
-                "%d:%d wrote %lld of %lld, read return %lld of %lld\n",
-                proc->pid, thread->pid,
-                (u64)bwr.write_consumed, (u64)bwr.write_size,
-                (u64)bwr.read_consumed, (u64)bwr.read_size);
+        // ... 省略代码
         if (copy_to_user(ubuf, &bwr, sizeof(bwr))) {
+// Note: 最后将修改完的数据拷贝回用户空间
+/*
+                             struct binder_write_read
+ubuf(user space) --------> |--------------------------------|
+                           |  binder_size_t write_size;     |
+                           |--------------------------------|
+                           |  binder_size_t write_consumed; |
+                           |--------------------------------|
+                           |  binder_uintptr_t write_buffer;|
+                           |--------------------------------|
+                           |  binder_size_t read_size;      |
+                           |--------------------------------|
+                           |  binder_size_t read_consumed;  |
+                           |--------------------------------|
+                           |  binder_uintptr_t read_buffer; |
+                           |--------------------------------|
+*/
             ret = -EFAULT;
             goto out;
         }
@@ -523,7 +524,7 @@ status_t IPCThreadState::talkWithDriver(bool doReceive) // Note: doReceive 默�
 
         while (ptr < end && thread->return_error.cmd == BR_OK) {
             int ret;
-// Note: 下面开始拷贝用户空间的cmd，此时应该是之前装入的BC_TRANSACTION
+// Note: 下面开始拷贝用户空间指针ptr指示的内容，此时是之前装入的 BC_TRANSACTION，并将值赋给binder_thread_write函数内的局部变量uint32_t cmd；
             if (get_user(cmd, (uint32_t __user *)ptr))
                 return -EFAULT;
             ptr += sizeof(uint32_t);
@@ -547,28 +548,41 @@ status_t IPCThreadState::talkWithDriver(bool doReceive) // Note: doReceive 默�
             case BC_REPLY_SG:// ... 省略代码
             case BC_TRANSACTION:
             case BC_REPLY: {
+// Note: 在内核空间 binder_thread_write 函数的栈中开辟一个临时内存，大小为sizeof(struct binder_transaction_data)，并用&tr指示
                 struct binder_transaction_data tr;
-// Note: 首先这里要复习一下数据在用户态的封装: 
-// Note:    Parcel类型的data封装了addService的入参，data又被封装进binder_transaction_data结构中；
-// Note:    binder_transaction_data结构对象被封装进IPCThreadState::mOut
-// Note:    IPCThreadState::mOut的数据地址被封装进**binder_write_read**中
-// Note: 上一次copy_from_user仅仅把binder_write_read结构对象拷贝进内核空间，但是IPCThreadState::mOut中的真正的数据部分并没有被拷贝，本次完成了如下数据的拷贝：
-/*
-    |----------------------------------------|
-    |binder_transaction_data.target.ptr      |
-    |----------------------------------------|
-    |binder_transaction_data.target.handle   |
-    |----------------------------------------|
-    |binder_transaction_data.code            |
-    |----------------------------------------|
-    |binder_transaction_data.flags           |
-    |----------------------------------------|
-    |binder_transaction_data.data.ptr.buffer |
-    |----------------------------------------|
-*/
                 if (copy_from_user(&tr, ptr, sizeof(tr)))
+// Note: 首先这里要复习一下数据在用户态的封装: 
+// Note:    Parcel类型的data封装了addService的入参，data作为指针变量又被封装进 binder_transaction_data 结构中；
+// Note:    binder_transaction_data 结构对象被封装进 IPCThreadState::mOut
+// Note:    IPCThreadState::mOut的数据地址被封装进**binder_write_read**中
+// Note: 上一次copy_from_user仅仅把binder_write_read结构对象拷贝进内核空间，但是IPCThreadState::mOut中的真正的数据部分并没有被拷贝，本次完成了struct binder_transaction_data数据的拷贝：
+/*
+      struct binder_transaction_data
+    |--------------------------------| <-------- &tr（内核空间）
+    | tr.target (= ?)                |
+    |--------------------------------|
+    | tr.cookie  (= ?)               |
+    |--------------------------------|
+    | tr.code (= ?)                  |
+    |--------------------------------|
+    | tr.flags (= ?)                 |
+    |--------------------------------|
+    | tr.sender_pid (= ?)            |
+    |--------------------------------|
+    | tr.sender_euid (= ?)           |
+    |--------------------------------|
+    | tr.data_size (= ?)             |
+    |--------------------------------|
+    | tr.offsets_size (= ?)          |
+    |--------------------------------|
+    | tr.data.ptr.buffer (= ?)       |
+    |--------------------------------|
+    | tr.data.ptr.offsets (= ?)      |
+    |--------------------------------|
+*/
                     return -EFAULT;
                 ptr += sizeof(tr);
+// Note: 根据cmd确认这是一次transaction后，拷贝完成上述结构，然后将数据地址&tr传入binder_transaction，进入transact：
                 binder_transaction(proc, thread, &tr,
                         cmd == BC_REPLY, 0);
                 break;
@@ -593,27 +607,6 @@ status_t IPCThreadState::talkWithDriver(bool doReceive) // Note: doReceive 默�
 &emsp;&emsp;&emsp;[binder_transaction][binder_transaction_lk]  
 
 ```c++
-    static struct binder_node *binder_get_node_refs_for_txn(
-            struct binder_node *node,
-            struct binder_proc **procp,
-            uint32_t *error)
-    {
-        struct binder_node *target_node = NULL;
-
-        binder_node_inner_lock(node);
-        if (node->proc) {
-            target_node = node;
-            binder_inc_node_nilocked(node, 1, 0, NULL);
-            binder_inc_node_tmpref_ilocked(node);
-            node->proc->tmp_ref++;
-            *procp = node->proc;
-        } else
-            *error = BR_DEAD_REPLY;
-        binder_node_inner_unlock(node);
-
-        return target_node;
-    }
-
     static void binder_transaction(struct binder_proc *proc,
                     struct binder_thread *thread,
                     struct binder_transaction_data *tr, int reply, // Note: reply是上个函数中的入参cmd == BC_REPLY，由于cmd实际为BC_TRANSACTION，所以reply为0
@@ -673,8 +666,6 @@ status_t IPCThreadState::talkWithDriver(bool doReceive) // Note: doReceive 默�
                 // ... 省略代码
             }
             // ... 省略代码
-            binder_inner_proc_lock(proc);
-            // ... 省略代码
             if (!(tr->flags & TF_ONE_WAY) && thread->transaction_stack) {
                 struct binder_transaction *tmp;
 
@@ -695,15 +686,15 @@ status_t IPCThreadState::talkWithDriver(bool doReceive) // Note: doReceive 默�
                     tmp = tmp->from_parent;
                 }
             }
-            binder_inner_proc_unlock(proc);
+            // ... 省略代码
         }
         // ... 省略代码
 
         /* TODO: reuse incoming transaction for reply */
-// Note: 在内核空间分配一个 struct binder_transaction 类型的对象 t
+// Note: 在内核空间（应该是堆上）分配一个 struct binder_transaction 类型的对象 t，并将所有元素置为0
         t = kzalloc(sizeof(*t), GFP_KERNEL);
         // ... 省略代码
-// Note: 在内核空间分配一个 struct binder_work 类型的对象 tcomplete
+// Note: 在内核空间（应该是堆上）分配一个 struct binder_work 类型的对象 tcomplete，并将所有元素置为0
         tcomplete = kzalloc(sizeof(*tcomplete), GFP_KERNEL);
         // ... 省略代码
 // Note: 非oneway的通信方式，把当前thread保存到 binder_transaction 对象的 from 字段
@@ -718,10 +709,10 @@ status_t IPCThreadState::talkWithDriver(bool doReceive) // Note: doReceive 默�
         t->flags = tr->flags;
         t->priority = task_nice(current);
         // ... 省略代码
-// Note: ********binder_alloc_new_buf********
-// Note: 从目标进程target_proc中分配内存空间，这一步非常重要，因为下面在目标进程的内核空间中分配的内存，和目标进程启动时调用mmap映射内存是一致的，这也是Binder一次拷贝的具体机制
-// Note: target_proc->alloc 记录着server端进程启动时执行mmap后映射的内存信息，binder_alloc_new_buf函数的作用中映射区域中找到一块合适的内存（用binder_buffer结构表示），用于
-// Note: 客户端实际传过来的参数的拷贝
+// Note: binder_alloc_new_buf -- Very Very Very Important!!!
+// Note:     target_proc->alloc是一个*struct binder_alloc*类型的成员变量，管理着目标进程（本次transaction对应的则是service manager）曾经通过mmap映射的那段内核和用户空间都可以看到的内存
+// Note:     这段内存被分成了一段段，每一段都用一个*struct binder_buffer*对象来管理，*struct binder_alloc*则管理这些*struct binder_buffer*
+// Note:     所谓binder_alloc_new_buf实际上并没有真正allocate，而是在target_proc->alloc管理的众多*struct binder_buffer*中找到最合适的一个，然后返回其指针
         t->buffer = binder_alloc_new_buf(&target_proc->alloc, tr->data_size,
             tr->offsets_size, extra_buffers_size,
             !reply && (t->flags & TF_ONE_WAY), current->tgid);
@@ -730,46 +721,19 @@ status_t IPCThreadState::talkWithDriver(bool doReceive) // Note: doReceive 默�
         t->buffer->transaction = t;
         t->buffer->target_node = target_node;
         t->buffer->clear_on_free = !!(t->flags & TF_CLEAR_BUF);
-        trace_binder_transaction_alloc_buf(t->buffer);
-// Note: binder_transaction_data.data.ptr.buffer就是名为data的Parcel对象中mData的值(reinterpret_cast<uintptr_t>(mData))，也就是数据的地址
-// Note: binder_transaction_data.data_size则是mData对应的数据的大小(mDataSize > mDataPos ? mDataSize : mDataPos)，单位为size_t，拷贝的具体内容如下：
-/*
-    |----------------------------------|
-    |DESCRIPTOR                        |
-    |----------------------------------|
-    |Context.ACTIVITY_SERVICE          |
-    |----------------------------------|
-
-    |----------------------------------|
-    |int(allowIsolated true 1)         |
-    |----------------------------------|
-    |int(DUMP_FLAG_PRIORITY_DEFAULT 8) |
-    |----------------------------------|
-*/
+// Note: 以上操作就是简单地对这个*struct binder_buffer*初始化
+        // ... 省略代码
         if (binder_alloc_copy_user_to_buffer(
                     &target_proc->alloc,
                     t->buffer, 0,
                     (const void __user *)
                         (uintptr_t)tr->data.ptr.buffer,
                     tr->data_size)) {
-// ... 省略代码
+// Note: binder_transaction_data.data.ptr.buffer 就是名为data的Parcel对象中mData的值(reinterpret_cast<uintptr_t>(mData))，也就是数据的地址
+// Note: binder_transaction_data.data_size 则是mData对应的数据的大小(mDataSize > mDataPos ? mDataSize : mDataPos)，单位为size_t
+            // ... 省略代码
             goto err_copy_data_failed;
         }
-// Note: binder_transaction_data.data.ptr.offsets就是名为data的Parcel对象中所有flat_binder_object对象的起始地址(reinterpret_cast<uintptr_t>(mObjects))
-// Note: binder_transaction_data.offsets_size则是这些flat_binder_object对象总的数据大小(data.ipcObjectsCount()*sizeof(binder_size_t))，拷贝的具体内容如下：
-/*
-    |----------------------------------|
-
-    |----------------------------------|
-
-    |----------------------------------|
-    |flat_binder_object                |
-    |----------------------------------|
-
-    |----------------------------------|
-
-    |----------------------------------|
-*/
         if (binder_alloc_copy_user_to_buffer(
                     &target_proc->alloc,
                     t->buffer,
@@ -777,10 +741,32 @@ status_t IPCThreadState::talkWithDriver(bool doReceive) // Note: doReceive 默�
                     (const void __user *)
                         (uintptr_t)tr->data.ptr.offsets,
                     tr->offsets_size)) {
-// ... 省略代码
+// Note: binder_transaction_data.data.ptr.offsets就是名为data的Parcel对象中所有flat_binder_object对象的起始地址(reinterpret_cast<uintptr_t>(mObjects))
+// Note: binder_transaction_data.offsets_size则是这些flat_binder_object对象总的数据大小(data.ipcObjectsCount()*sizeof(binder_size_t))
+            // ... 省略代码
             goto err_copy_data_failed;
         }
-// ... 省略代码
+// Note: 上面两个 binder_alloc_copy_user_to_buffer 函数分别拷贝了_data中普通数据和flat_binder_object类型对象，因此可以放到一起看
+// Note: 最终完成的就是将_data的数据拷贝到映射的内存中，之后服务端使用是就不用再拷贝，这就是为什么binder是用一次拷贝完成了跨进程的通信。
+/*
+(struct binder_transaction *)t->(struct binder_buffer *)buffer->(void __user *)user_data --|
+                                                                                           |
+ |-----------------------------------------------------------------------------------------|
+ |
+ |--------> |----------------------------------------------------------------|
+            |IServiceManager#DESCRIPTOR("android.os.IServiceManager")        | 
+            |----------------------------------------------------------------|
+            |Context.ACTIVITY_SERVICE("activity")                            |
+            |----------------------------------------------------------------|
+            |flat_binder_object(from ActivityManagerService)                 |
+            |----------------------------------------------------------------|
+            |int(allowIsolated true 1)                                       |
+            |----------------------------------------------------------------|
+            |int(DUMP_FLAG_PRIORITY_DEFAULT 8)                               |
+            |----------------------------------------------------------------|
+    
+*/
+        // ... 省略代码
         off_start_offset = ALIGN(tr->data_size, sizeof(void *));
         buffer_offset = off_start_offset;
         off_end_offset = off_start_offset + tr->offsets_size;
@@ -843,175 +829,6 @@ status_t IPCThreadState::talkWithDriver(bool doReceive) // Note: doReceive 默�
     }
 ```
 
-&emsp;&emsp;&emsp;&emsp;[binder_get_node_refs_for_txn][binder_get_node_refs_for_txn_lk]  
-&emsp;&emsp;&emsp;&emsp;[binder_alloc_new_buf][binder_alloc_new_buf_lk]  
-
-```c++
-    struct binder_buffer *binder_alloc_new_buf(struct binder_alloc *alloc,
-                        size_t data_size,
-                        size_t offsets_size,
-                        size_t extra_buffers_size,
-                        int is_async,
-                        int pid)
-    {
-        struct binder_buffer *buffer;
-
-        mutex_lock(&alloc->mutex);
-        buffer = binder_alloc_new_buf_locked(alloc, data_size, offsets_size,
-                            extra_buffers_size, is_async, pid);
-        mutex_unlock(&alloc->mutex);
-        return buffer;
-    }
-```
-
-&emsp;&emsp;&emsp;&emsp;&emsp;[binder_alloc_new_buf_locked][binder_alloc_new_buf_locked_lk]  
-
-```c++
-    static struct binder_buffer *binder_alloc_new_buf_locked(
-                    struct binder_alloc *alloc,
-                    size_t data_size,
-                    size_t offsets_size,
-                    size_t extra_buffers_size,
-                    int is_async,
-                    int pid)
-    {
-// Note: 注意！！！n来自目标进程的binder_alloc中保存的free_buffers
-        struct rb_node *n = alloc->free_buffers.rb_node;
-        struct binder_buffer *buffer;
-        size_t buffer_size;
-        struct rb_node *best_fit = NULL;
-        void __user *has_page_addr;
-        void __user *end_page_addr;
-        size_t size, data_offsets_size;
-        int ret;
-
-        // ... 省略错误处理的代码
-
-        data_offsets_size = ALIGN(data_size, sizeof(void *)) +
-            ALIGN(offsets_size, sizeof(void *));
-
-        // ... 省略错误处理的代码
-        size = data_offsets_size + ALIGN(extra_buffers_size, sizeof(void *));
-        // ... 省略错误处理的代码
-
-        /* Pad 0-size buffers so they get assigned unique addresses */
-        size = max(size, sizeof(void *));
-// Note: 在目标进程中找到一块合适的binder_buffer
-        while (n) {
-            buffer = rb_entry(n, struct binder_buffer, rb_node);
-            BUG_ON(!buffer->free);
-            buffer_size = binder_alloc_buffer_size(alloc, buffer);
-
-            if (size < buffer_size) {
-                best_fit = n;
-                n = n->rb_left;
-            } else if (size > buffer_size)
-                n = n->rb_right;
-            else {
-                best_fit = n;
-                break;
-            }
-        }
-        // ... 省略边界条件处理的代码
-
-        // ... 省略代码
-
-        has_page_addr = (void __user *)
-            (((uintptr_t)buffer->user_data + buffer_size) & PAGE_MASK);
-        WARN_ON(n && buffer_size != size);
-        end_page_addr =
-            (void __user *)PAGE_ALIGN((uintptr_t)buffer->user_data + size);
-        if (end_page_addr > has_page_addr)
-            end_page_addr = has_page_addr;
-        ret = binder_update_page_range(alloc, 1, (void __user *)
-            PAGE_ALIGN((uintptr_t)buffer->user_data), end_page_addr);
-        if (ret)
-            return ERR_PTR(ret);
-
-        if (buffer_size != size) {
-            struct binder_buffer *new_buffer;
-
-            new_buffer = kzalloc(sizeof(*buffer), GFP_KERNEL);
-            if (!new_buffer) {
-                pr_err("%s: %d failed to alloc new buffer struct\n",
-                    __func__, alloc->pid);
-                goto err_alloc_buf_struct_failed;
-            }
-            new_buffer->user_data = (u8 __user *)buffer->user_data + size;
-            list_add(&new_buffer->entry, &buffer->entry);
-            new_buffer->free = 1;
-            binder_insert_free_buffer(alloc, new_buffer);
-        }
-// Note: 对找到的buffer进行初始化
-        rb_erase(best_fit, &alloc->free_buffers);
-        buffer->free = 0;
-        buffer->allow_user_free = 0;
-        binder_insert_allocated_buffer_locked(alloc, buffer);
-        binder_alloc_debug(BINDER_DEBUG_BUFFER_ALLOC,
-                "%d: binder_alloc_buf size %zd got %pK\n",
-                alloc->pid, size, buffer);
-        buffer->data_size = data_size;
-        buffer->offsets_size = offsets_size;
-        buffer->async_transaction = is_async;
-        buffer->extra_buffers_size = extra_buffers_size;
-        buffer->pid = pid;
-        if (is_async) {
-            alloc->free_async_space -= size + sizeof(struct binder_buffer);
-            binder_alloc_debug(BINDER_DEBUG_BUFFER_ALLOC_ASYNC,
-                    "%d: binder_alloc_buf size %zd async free %zd\n",
-                    alloc->pid, size, alloc->free_async_space);
-            if (alloc->free_async_space < alloc->buffer_size / 10) {
-                /*
-                * Start detecting spammers once we have less than 20%
-                * of async space left (which is less than 10% of total
-                * buffer size).
-                */
-                debug_low_async_space_locked(alloc, pid);
-            }
-        }
-        return buffer;
-
-    // ... 省略错误处理的代码
-    }
-```
-
-&emsp;&emsp;&emsp;&emsp;[binder_alloc_copy_user_to_buffer][binder_alloc_copy_user_to_buffer_lk]  
-
-```c++
-    unsigned long
-    binder_alloc_copy_user_to_buffer(struct binder_alloc *alloc,
-                    struct binder_buffer *buffer,
-                    binder_size_t buffer_offset,
-                    const void __user *from,
-                    size_t bytes)
-    {
-        if (!check_buffer(alloc, buffer, buffer_offset, bytes))
-            return bytes;
-
-        while (bytes) {
-            unsigned long size;
-            unsigned long ret;
-            struct page *page;
-            pgoff_t pgoff;
-            void *kptr;
-
-            page = binder_alloc_get_page(alloc, buffer,
-                            buffer_offset, &pgoff);
-            size = min_t(size_t, bytes, PAGE_SIZE - pgoff);
-            kptr = kmap(page) + pgoff;
-// Note: 现在，终于把IServiceManager.Stub.Proxy.addService的入参从用户空间拷贝到了内核空间
-            ret = copy_from_user(kptr, from, size);
-            kunmap(page);
-            if (ret)
-                return bytes - size + ret;
-            bytes -= size;
-            from += size;
-            buffer_offset += size;
-        }
-        return 0;
-    }
-```
-
 &emsp;&emsp;&emsp;&emsp;[binder_proc_transaction][binder_proc_transaction_lk]  
 
 ```c++
@@ -1067,10 +884,6 @@ status_t IPCThreadState::talkWithDriver(bool doReceive) // Note: doReceive 默�
 [binder_ioctl_write_read_lk]:https://elixir.bootlin.com/linux/latest/source/drivers/android/binder.c#L4824
 [binder_thread_write_lk]:https://elixir.bootlin.com/linux/latest/source/drivers/android/binder.c#L3577
 [binder_transaction_lk]:https://elixir.bootlin.com/linux/latest/source/drivers/android/binder.c#L2814
-[binder_get_node_refs_for_txn_lk]:https://elixir.bootlin.com/linux/latest/source/drivers/android/binder.c#L2793
-[binder_alloc_new_buf_lk]:https://elixir.bootlin.com/linux/latest/source/drivers/android/binder_alloc.c#L567
-[binder_alloc_new_buf_locked_lk]:https://elixir.bootlin.com/linux/latest/source/drivers/android/binder_alloc.c#L378
-[binder_alloc_copy_user_to_buffer_lk]:https://elixir.bootlin.com/linux/latest/source/drivers/android/binder_alloc.c#L1199
 [binder_proc_transaction_lk]:https://elixir.bootlin.com/linux/latest/source/drivers/android/binder.c#L2727
 [binder_wakeup_thread_ilocked_lk]:https://elixir.bootlin.com/linux/latest/source/drivers/android/binder.c#L984
 [wake_up_interruptible_lk]:https://elixir.bootlin.com/linux/latest/source/drivers/android/binder.c#L994
@@ -1093,7 +906,7 @@ status_t IPCThreadState::talkWithDriver(bool doReceive) // Note: doReceive 默�
 
 ### 6. 在service manager进程的内核态执行
 
-不管上一小节的问题答案最终是什么，我们知道service manager进程总是该从*binder_thread_read*函数开始： 
+不管上一小节的问题答案最终是什么，我们知道service manager进程总是该从*binder_thread_read*函数开始：  
 
 [binder_ioctl_write_read][binder_ioctl_write_read_lk]  
 
@@ -1132,7 +945,7 @@ status_t IPCThreadState::talkWithDriver(bool doReceive) // Note: doReceive 默�
         // ... 省略错误处理代码
 
         if (bwr.write_size > 0) {
-            // ... 省略代码
+            // ... 省略 binder_thread_write 代码
         }
         if (bwr.read_size > 0) {
             ret = binder_thread_read(proc, thread, bwr.read_buffer,
@@ -1170,7 +983,7 @@ status_t IPCThreadState::talkWithDriver(bool doReceive) // Note: doReceive 默�
         int wait_for_proc_work;
 
         if (*consumed == 0) {
-// Note: 当没有发生写数据的动作时，先将指令头 BR_NOOP 写入， put_user 可以理解为向用户空间写入立即数
+// Note: ？？？？？？ 这段代码的意义是什么? 每次binder_thread_read都会先执行这个操作吗？这个BR_NOOP命令和BR_TRANSACTION命令应该是互斥的，那么BR_TRANSACTION如何替换它呢？？？
             if (put_user(BR_NOOP, (uint32_t __user *)ptr))
                 return -EFAULT;
             ptr += sizeof(uint32_t);
@@ -1206,6 +1019,13 @@ status_t IPCThreadState::talkWithDriver(bool doReceive) // Note: doReceive 默�
 
         while (1) {
             uint32_t cmd;
+// Note: 
+/*
+    struct binder_transaction_data_secctx {
+        struct binder_transaction_data transaction_data;
+        binder_uintptr_t secctx;
+    };
+*/
             struct binder_transaction_data_secctx tr;
             struct binder_transaction_data *trd = &tr.transaction_data;
             struct binder_work *w = NULL;
@@ -1220,7 +1040,7 @@ status_t IPCThreadState::talkWithDriver(bool doReceive) // Note: doReceive 默�
                 list = &thread->todo;
             else if (!binder_worklist_empty_ilocked(&proc->todo) &&
                 wait_for_proc_work)
-                list = &proc->todo;
+                // ... 省略代码
             else {// ... 省略代码
             }
 
@@ -1232,6 +1052,7 @@ status_t IPCThreadState::talkWithDriver(bool doReceive) // Note: doReceive 默�
 
             switch (w->type) {
             case BINDER_WORK_TRANSACTION: {
+// Note: 通过binder_work类型的指针变量w获取binder_work的container -- binder_transaction结构，并用指针t指示
                 binder_inner_proc_unlock(proc);
                 t = container_of(w, struct binder_transaction, work);
             } break;
@@ -1249,6 +1070,7 @@ status_t IPCThreadState::talkWithDriver(bool doReceive) // Note: doReceive 默�
 
             // ... 省略错误处理的代码
 // Note: !!!!!!
+// Note: 获取目标node
             if (t->buffer->target_node) {
                 struct binder_node *target_node = t->buffer->target_node;
 
@@ -1261,6 +1083,7 @@ status_t IPCThreadState::talkWithDriver(bool doReceive) // Note: doReceive 默�
                 else if (!(t->flags & TF_ONE_WAY) ||
                     t->saved_priority > target_node->min_priority)
                     binder_set_nice(target_node->min_priority);
+// Note: 将命令设置为BR_TRANSACTION，后面还会看到
                 cmd = BR_TRANSACTION;
             } else {
                 trd->target.ptr = 0;
@@ -1312,7 +1135,43 @@ status_t IPCThreadState::talkWithDriver(bool doReceive) // Note: doReceive 默�
             }
             trd->data_size = t->buffer->data_size;
             trd->offsets_size = t->buffer->offsets_size;
+// Note: 这里的赋值 Very Very Very Important: 
             trd->data.ptr.buffer = (uintptr_t)t->buffer->user_data;
+// Note:
+/*
+(struct binder_transaction_data_secctx)tr.(struct binder_transaction_data)transaction_data ----|
+                                                                                               |
+|----------------------------------------------------------------------------------------------|
+|
+|--------> |----------------------|
+           | trd.target           |
+           |----------------------|
+           | trd.cookie           |
+           |----------------------|
+           | trd.code             |
+           |----------------------|
+           | trd.flags            |
+           |----------------------|
+           | trd.sender_pid       |
+           |----------------------|
+           | trd.sender_euid      |
+           |----------------------|
+           | trd.data_size        |
+           |----------------------|
+           | trd.offsets_size     |
+           |----------------------|               server端mmap的空间
+           | trd.data.ptr.buffer  | --------> |--------------------------------| <-------- (struct binder_transaction *)t->(struct binder_buffer *)buffer->(void __user *)user_data
+           |----------------------|           |DESCRIPTOR                      |
+           | trd.data.ptr.offsets |           |--------------------------------|
+           |----------------------|           |Context.ACTIVITY_SERVICE        |
+                                              |--------------------------------|
+                                              |flat_binder_object              |
+                                              |--------------------------------|
+                                              |int(allowIsolated true 1)       |
+                                              |--------------------------------|
+                                              |int(DUMP_FLAG_PRIORITY_DEFAULT 8)|
+                                              |--------------------------------|
+*/
             trd->data.ptr.offsets = trd->data.ptr.buffer +
                         ALIGN(t->buffer->data_size,
                             sizeof(void *));
@@ -1323,43 +1182,84 @@ status_t IPCThreadState::talkWithDriver(bool doReceive) // Note: doReceive 默�
                 trsize = sizeof(tr);
             }
             if (put_user(cmd, (uint32_t __user *)ptr)) {
-                if (t_from)
-                    binder_thread_dec_tmpref(t_from);
-
-                binder_cleanup_transaction(t, "put_user failed",
-                            BR_FAILED_REPLY);
-
-                return -EFAULT;
+// Note: 将cmd写回到用户空间
+/*
+                   struct binder_write_read
+&bwr --------> |--------------------------------|
+               |  binder_size_t write_size;     |
+               |--------------------------------|
+               |  binder_size_t write_consumed; |
+               |--------------------------------|
+               |  binder_uintptr_t write_buffer;|
+               |--------------------------------|
+               |  binder_size_t read_size;      |
+               |--------------------------------|
+               |  binder_size_t read_consumed;  |
+               |--------------------------------|           用户空间IPCThreadState::mIn::mData
+               |  binder_uintptr_t read_buffer; |--------> |--------------------------------|
+               |--------------------------------|          | BR_TRANSACTION                 |
+                                                           |--------------------------------|
+*/
+                // ... 省略错误处理代码
             }
             ptr += sizeof(uint32_t);
+            if (copy_to_user(ptr, &tr, trsize)) {
 // Note: unsigned long copy_to_user(void __user *to, const void *from, unsigned long n)：
 // Note:    to 用户空间的指针
 // Note:    from 内核空间的指针
 // Note:    n 是内核空间向用户空间拷贝的字节数
-            if (copy_to_user(ptr, &tr, trsize)) {
-                if (t_from)
-                    binder_thread_dec_tmpref(t_from);
-
-                binder_cleanup_transaction(t, "copy_to_user failed",
-                            BR_FAILED_REPLY);
-
-                return -EFAULT;
+// Note: 本函数将binder_thread_read栈中的临时变量struct binder_transaction_data_secctx类型的tr中的内容拷贝到用户空间
+/*
+                   struct binder_write_read
+&bwr --------> |--------------------------------|
+               |  binder_size_t write_size;     |
+               |--------------------------------|
+               |  binder_size_t write_consumed; |
+               |--------------------------------|
+               |  binder_uintptr_t write_buffer;|
+               |--------------------------------|
+               |  binder_size_t read_size;      |
+               |--------------------------------|
+               |  binder_size_t read_consumed;  |
+               |--------------------------------|                  server端用户空间
+               |  binder_uintptr_t read_buffer; |--------> |--------------------------------| <-------- IPCThreadState::mIn::mData
+               |--------------------------------|          | BR_TRANSACTION                 |
+(struct binder_transaction_data_secctx)tr.transaction_data |--------------------------------|
+                                                           | trd.target                     |
+                                                           |--------------------------------|
+                                                           | trd.cookie                     |
+                                                           |--------------------------------|
+                                                           | trd.code                       |
+                                                           |--------------------------------|
+                                                           | trd.flags                      |
+                                                           |--------------------------------|
+                                                           | trd.sender_pid                 |
+                                                           |--------------------------------|
+                                                           | trd.sender_euid                |
+                                                           |--------------------------------|
+                                                           | trd.data_size                  |
+                                                           |--------------------------------|
+                                                           | trd.offsets_size               |
+                                                           |--------------------------------|             server端mmap的空间
+                                                           | trd.data.ptr.buffer            | --------> |--------------------------------|
+                                                           |--------------------------------|           |DESCRIPTOR                      |
+                                                           | trd.data.ptr.offsets           |           |--------------------------------|
+                                                           |--------------------------------|           |Context.ACTIVITY_SERVICE        |
+          (struct binder_transaction_data_secctx)tr.secctx | binder_uintptr_t secctx        |           |--------------------------------|
+                                                           |--------------------------------|           |flat_binder_object              |
+                                                                                                        |--------------------------------|
+                                                                                                        |int(allowIsolated true 1)       |
+                                                                                                        |--------------------------------|
+                                                                                                        |int(DUMP_FLAG_PRIORITY_DEFAULT 8)|
+                                                                                                        |--------------------------------|
+*/
+                // ... 省略错误处理代码
             }
             ptr += trsize;
 
             trace_binder_transaction_received(t);
             binder_stat_br(proc, thread, cmd);
-            binder_debug(BINDER_DEBUG_TRANSACTION,
-                    "%d:%d %s %d %d:%d, cmd %d size %zd-%zd ptr %016llx-%016llx\n",
-                    proc->pid, thread->pid,
-                    (cmd == BR_TRANSACTION) ? "BR_TRANSACTION" :
-                    (cmd == BR_TRANSACTION_SEC_CTX) ?
-                        "BR_TRANSACTION_SEC_CTX" : "BR_REPLY",
-                    t->debug_id, t_from ? t_from->proc->pid : 0,
-                    t_from ? t_from->pid : 0, cmd,
-                    t->buffer->data_size, t->buffer->offsets_size,
-                    (u64)trd->data.ptr.buffer,
-                    (u64)trd->data.ptr.offsets);
+            // ... 省略代码
 
             if (t_from)
                 binder_thread_dec_tmpref(t_from);
